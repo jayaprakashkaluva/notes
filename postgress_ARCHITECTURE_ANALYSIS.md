@@ -34,8 +34,6 @@
 12. [What this devel tree (20devel) adds](#12-what-this-devel-tree-20devel-adds)
 13. [Implementation deep dive: the mechanisms under the architecture](#13-implementation-deep-dive-the-mechanisms-under-the-architecture)
 
----
-
 ## 1. The architectural thesis
 
 PostgreSQL is best understood not as one design but as five long-lived bets that
@@ -590,7 +588,6 @@ multi-year work on or around PostgreSQL should assume those three currents
 continue.
 
 ---
-
 ## 13. Implementation deep dive: the mechanisms under the architecture
 
 Everything above describes shapes; this section describes machinery — the
