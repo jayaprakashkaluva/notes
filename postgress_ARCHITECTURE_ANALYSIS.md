@@ -32,6 +32,7 @@
 10. [Extensibility as architecture](#10-extensibility-as-architecture)
 11. [Structural tensions — the staff-level scorecard](#11-structural-tensions--the-staff-level-scorecard)
 12. [What this devel tree (20devel) adds](#12-what-this-devel-tree-20devel-adds)
+13. [Implementation deep dive: the mechanisms under the architecture](#13-implementation-deep-dive-the-mechanisms-under-the-architecture)
 
 ---
 
@@ -587,6 +588,273 @@ vacuum's failure modes operationally survivable, and make logical replication
 complete enough to be the upgrade and failover story.* Anyone planning
 multi-year work on or around PostgreSQL should assume those three currents
 continue.
+
+---
+
+## 13. Implementation deep dive: the mechanisms under the architecture
+
+Everything above describes shapes; this section describes machinery — the
+specific data structures, bit layouts, and algorithms, with the constants as
+they stand in this tree. This is the level at which patches are reviewed.
+
+### 13.1 Memory management: `palloc` and the context tree
+
+The server never calls bare `malloc` in normal paths. All allocation goes
+through `palloc()` into the **current memory context**, and contexts form a
+tree (`TopMemoryContext` → per-connection → per-transaction →
+per-query/`ExecutorState` → per-tuple `ExprContext`). The killer property is
+*bulk free*: `MemoryContextReset/Delete` releases everything at once, so query
+teardown and — crucially — **error recovery** never walk individual
+allocations. `ereport(ERROR)` longjmps (via `sigsetjmp` in the backend main
+loop / `PG_TRY` blocks) back to a safe point, and transaction abort simply
+deletes the subtree of contexts. Leaks are structurally confined: forget to
+`pfree` and the memory dies with its context anyway.
+
+Four allocator implementations sit behind one API (`src/backend/utils/mmgr/`):
+
+| Allocator | File | Strategy | Built for |
+|---|---|---|---|
+| AllocSet | `aset.c` | Power-of-2 chunk freelists; blocks start small and double up to 8 MB; chunks > 8 kB get dedicated blocks | The default; general query memory |
+| Generation | `generation.c` | Append-only blocks, freed when every chunk in the block is freed; no per-chunk reuse | FIFO-ish lifetimes: `reorderbuffer.c` decoded changes |
+| Slab | `slab.c` | Fixed-size chunks, per-block freelists | Many same-sized objects with churn (WAL-sender, radix tree nodes) |
+| Bump | `bump.c` | Pointer-bump, **no chunk headers, no pfree at all** | Densest possible storage: tuplesort runs |
+
+Each chunk carries an 8-byte header (except bump: zero) encoding its context
+type in 3 spare bits, which is how `pfree(ptr)` finds its owner without any
+lookup. `work_mem`-bounded operators account against
+`MemoryContextMemAllocated()` on the context, not per-chunk — cheap because
+block counts are small.
+
+### 13.2 On-disk formats: tuple, page, varlena
+
+A heap tuple header (`HeapTupleHeaderData`, `htup_details.h`) is **23 bytes**
+before the null bitmap:
+
+```
+t_xmin      4B   inserting XID
+t_xmax      4B   deleting/locking XID (or 0/invalid)
+t_cid       4B   command id — inserting OR deleting; a "combo CID"
+                 (HEAP_COMBOCID) multiplexes both when one xact does both,
+                 via a backend-local combo-cid map — an on-disk space hack
+t_ctid      6B   (block, offset) of this or the NEWER version → HOT chains
+t_infomask2 2B   attribute count (11 bits) + HOT flags (HEAP_HOT_UPDATED,
+                 HEAP_ONLY_TUPLE)
+t_infomask  2B   null-bitmap-present, has-varwidth, XMIN/XMAX_COMMITTED|
+                 INVALID hint bits, lock-mode bits, IS_MULTI, ...
+t_hoff      1B   offset to user data (header + null bitmap + alignment)
+```
+
+The two *hint bits per XID* (`committed`/`invalid`) are the visibility fast
+path: set opportunistically after a clog lookup, they let future scans skip
+clog entirely. They are set without WAL (a page-LSN/checksum interaction:
+with checksums on, hint-bit-only dirtying forces a full-page image via
+`XLogSaveBufferForHint` — a real write-amplification line item).
+
+Pages (`bufpage.h`): 24-byte `PageHeaderData` (first 8 bytes are `pd_lsn` —
+the WAL-before-data enforcement point), then `pd_lower`/`pd_upper` delimiting
+the hole between the line-pointer array (4-byte `ItemIdData`: 15-bit offset,
+2 flag bits, 15-bit length) growing down and tuples growing up. Line pointers
+are the indirection that makes HOT possible: `LP_REDIRECT` pointers let vacuum
+collapse a HOT chain while index entries keep pointing at the original slot;
+`LP_DEAD` marks slots reclaimable that index scans may also set (the
+"kill_prior_tuple" optimization).
+
+Variable-length datums (**varlena**): a 4-byte header (length + 2 flag bits)
+normally, compressed to a **1-byte header** for values ≤ 126 bytes when
+tuples are formed — misaligned by design, saving up to 3 padding bytes per
+short string; every datatype function normalizes via `PG_DETOAST_DATUM`. An
+out-of-line TOAST pointer is an 18-byte varlena carrying (value OID, toast
+relation OID, raw/compressed sizes); chunks live in `pg_toast.pg_toast_<oid>`
+sliced at ~2000 bytes, retrieved by index scan, with slicing support so
+`substr()` on a huge text fetches only needed chunks.
+
+### 13.3 The buffer descriptor: lock-free pinning in one atomic word
+
+Each of the `shared_buffers` slots has a `BufferDesc` whose entire mutable
+state packs into a **single `pg_atomic_uint32`** (`buf_internals.h`):
+
+```
+bits  0–17  refcount        (BUF_REFCOUNT_BITS 18)   — pin count
+bits 18–21  usage_count     (BUF_USAGECOUNT_BITS 4)  — clock-sweep, max 5
+bits 22–31  flags           (BUF_FLAG_BITS 12)       — BM_DIRTY, BM_VALID,
+            BM_TAG_VALID, BM_IO_IN_PROGRESS, BM_LOCKED, BM_JUST_DIRTIED,
+            BM_PIN_COUNT_WAITER, BM_CHECKPOINT_NEEDED, ...
+```
+
+Pinning is a compare-and-swap increment — no lock, no bus-locked RMW beyond
+the CAS — and `BM_LOCKED` doubles as an embedded spinlock for the rare
+multi-field transitions. Each backend additionally keeps a tiny private array
+(8 entries, then a hash table) of its own pins (`PrivateRefCount`), so
+re-pinning a buffer you already hold touches no shared memory at all. Page
+content is protected by a separate per-buffer LWLock; the descriptor and
+content lock live in different arrays for cache-line hygiene. Lookup goes
+through a shared hash table striped across **128 partitions**
+(`NUM_BUFFER_PARTITIONS`), so two backends faulting different pages almost
+never contend.
+
+### 13.4 Snapshots: the dense-array `GetSnapshotData`
+
+Per-process state is a `PGPROC` in shared memory, but the hot fields are
+*mirrored into dense parallel arrays* indexed by `pgxactoff`:
+`ProcGlobal->xids[]`, `->subxidStates[]`, `->statusFlags[]` (the PG 14
+snapshot-scalability rework). `GetSnapshotData()` therefore scans one
+contiguous XID array — cache-line-friendly — instead of chasing hundreds of
+`PGPROC` pointers. Two more layers of avoidance sit on top: an atomic
+`xactCompletionCount` lets a backend *reuse its previous snapshot wholesale*
+if no transaction has committed since; and per-tuple visibility checks use
+`GlobalVisState` horizons (maintained lazily) rather than full snapshots
+where possible. Subtransactions: each snapshot carries a `subxip` array, but
+each PGPROC caches only 64 subxids; overflow flips a bit that forces
+visibility checks through the `subtrans` SLRU — why "thousands of savepoints
+in one transaction" is a known performance cliff.
+
+### 13.5 WAL insertion: two-phase, eight-lane
+
+`XLogInsertRecord` (in the 342 KB `xlog.c`) splits insertion into:
+
+1. **Reserve** — a single spinlock (`insertpos_lck`) guards nothing but two
+   integers (current byte position + previous record link). The critical
+   section is a handful of arithmetic ops: this is the serialization point
+   for all WAL and it is kept microscopic.
+2. **Copy** — the record is CRC32C-summed and memcpy'd into the shared WAL
+   buffer ring while holding one of **8 insertion LWLocks**
+   (`NUM_XLOGINSERT_LOCKS`), so up to 8 backends copy concurrently. Each
+   lock exposes an `insertingAt` progress LSN so a flusher only waits for
+   copies that overlap its target (`WaitXLogInsertionsToFinish`).
+
+Commit calls `XLogFlush(commit_lsn)`: whoever wins the flush lock writes and
+fsyncs *everything accumulated*, satisfying all queued committers at once —
+group commit with no explicit batching knob. Record integrity is CRC32C
+(hardware-accelerated); torn-page defense is the FPW mechanism from §7, and
+backup blocks are hole-compressed (optionally lz4/zstd via
+`wal_compression`).
+
+### 13.6 Lock manager: the fast path that saves every query
+
+Every query takes an `AccessShareLock` on every relation it touches; pushing
+those through the shared lock hash would be a global bottleneck. The fast
+path (`storage/lmgr/lock.c`, `proc.h`): weak relation locks (≤
+`RowExclusiveLock`) are recorded in a per-backend array in its own PGPROC —
+**groups of 16 slots** (`FP_LOCK_SLOTS_PER_GROUP`), with the group count now
+sized from `max_locks_per_transaction` up to 1024 groups (a recent change;
+it used to be a hard 16 total). Taking a fast-path lock touches only your
+own PGPROC under your own LWLock. The trick is the other direction: anyone
+wanting a *strong* lock (e.g. `ALTER TABLE`) first bumps a counter in
+`FastPathStrongRelationLocks` (1024 hash slots), which forces subsequent
+weak lockers of that relation into the shared table, then scans every
+backend's fast-path array to migrate existing entries. Cost lands on rare
+DDL, not on every SELECT. The shared table itself is striped 16 ways
+(`NUM_LOCK_PARTITIONS`); deadlock detection is lazy — sleep
+`deadlock_timeout` (1s) first, then run the waits-for graph search, on the
+bet that real deadlocks are rare and blocking is usually just contention.
+
+### 13.7 Caches and invalidation: syscache → relcache → sinval
+
+Catalog access never scans catalogs in hot paths. **Catcache**
+(`catcache.c`): one hash per (catalog, index) pair defined in `syscache.c`,
+caching individual tuples *and negative entries* (absence is cacheable —
+vital for name lookups walking `search_path`). **Relcache** (`relcache.c`,
+230 KB): assembled `RelationData` descriptors — tuple descriptor, AM
+routine, index list, partition descriptor, RLS policies — the thing a
+`Relation` handle points at. Coherence: any catalog change queues
+invalidation messages that publish to a shared ring
+(`sinvaladt.c`, 4096 entries); every backend drains at transaction
+boundaries and at lock acquisition (the key handshake: you cannot observe a
+stale relcache entry for a relation you just locked, because obtaining the
+lock forces you to process the invalidation the DDL sent before it released
+its conflicting lock). Ring overflow triggers a "catchup" interrupt cascade
+where laggards rebuild caches wholesale. Plan cache (`plancache.c`) sits on
+top with the visible-in-production heuristic: five custom plans, then switch
+to the generic plan if its cost is not worse than the average custom cost.
+
+### 13.8 B-tree internals: Lehman–Yao plus twenty years of tuning
+
+`nbtree/` implements Lehman & Yao: every page has a **right-link** and a
+**high key**, so a descending reader that lands on a just-split page detects
+"my key exceeds the high key" and simply moves right — no lock coupling;
+readers hold at most one page lock at a time, and never block on splits in
+flight. Splits propagate up in a separate step; a crash between the two
+leaves a "half-dead"/incomplete split repaired lazily. On top of the classic
+algorithm: **suffix truncation** (pivot keys keep only distinguishing
+prefix), **deduplication** (equal keys collapse into posting lists — halves
+index size for low-cardinality columns), and **bottom-up deletion** (a
+would-be page split first tries to evict entries whose heap tuples are dead,
+targeting exactly the version-churn bloat from §6). Index-only scans consult
+the visibility map per heap page; the planner costs this from the VM's
+all-visible fraction in `pg_class.relallvisible`.
+
+### 13.9 Executor mechanics: slots, opcodes, spilling
+
+Tuples flow as `TupleTableSlot`s with four representations behind one vtable
+(`TTSOpsVirtual` — just datum/isnull arrays, `TTSOpsHeapTuple`,
+`TTSOpsMinimalTuple` — no visibility header, for hash tables and tuplestores,
+`TTSOpsBufferHeapTuple` — points into a pinned buffer, zero-copy). Attribute
+access is lazy: `slot_getattr(n)` deforms columns 1..n once and caches.
+
+Expression evaluation compiles each expression tree into a **flat array of
+opcode steps** (174 `EEOP_*` opcodes in `execExpr.h`), executed by
+`execExprInterp.c` with **computed-goto dispatch** where the compiler
+supports it (better branch prediction than a switch). The JIT
+(`jit/llvm/`) is exactly this opcode stream lowered to LLVM IR — same
+semantics, no separate codegen path — plus tuple-deforming compilation;
+costing gates (`jit_above_cost`) decide per query.
+
+Memory-bounded operators all have disk-spill strategies: `tuplesort.c` does
+quicksort-in-memory with **abbreviated keys** (first 8 bytes of a
+strxfrm'd/normalized key compared as a Datum before full comparison), falling
+to polyphase-descended external merge with bounded merge fan-in;
+`nodeHash.c` grows batches by doubling and spills partitions
+(hybrid hash join), with skew-value handling; hash aggregation spills
+partitions since PG 13 (before that it could simply blow past `work_mem` —
+worth remembering when reading old incident reports). `hash_mem_multiplier`
+exists because hashing suffers more from spilling than sorting does.
+
+### 13.10 Shared memory and parallel infrastructure
+
+The main segment is one anonymous `mmap` (plus a tiny SysV stub for
+interlocking), sized once at postmaster start from `shared_buffers` et al. —
+resizing requires restart. Optional huge pages (`huge_pages`) matter at
+scale: hundreds of processes × page-table entries for 32 GB of
+`shared_buffers` is real memory. On top, **DSM** (dynamic shared memory)
+segments are created at need, **DSA** (`dsa.c`) provides a malloc-style
+allocator over them using *relative pointers* (`dsa_pointer`, since
+segments map at different addresses per process), and `shm_mq.c` provides
+single-producer/single-consumer message queues. Parallel query is assembled
+from exactly these parts: leader serializes snapshot + GUCs + plan into a
+DSM "parallel context", workers attach, execute the same plan tree flagged
+parallel-aware, and stream tuples back through per-worker shm_mqs into
+`Gather`. Parallel scans coordinate via an atomic next-block counter in DSM
+(with chunked allocation for sequential I/O locality); parallel hash join
+builds one shared hash table in DSA with a barrier-synchronized build phase.
+
+### 13.11 SLRUs: the metadata caches behind MVCC
+
+Six "simple LRU" areas (`slru.c`) back the transaction metadata that is too
+big for fixed shared memory but too hot for buffered relations: `clog`
+(**2 bits per XID** → 32K transaction verdicts per 8 kB page), `subtrans`
+(parent XID per subxact), `multixact` offsets + members (the §9 multi-locker
+groups), `commit_ts`, `serializable` predicate-lock state, and notify. Each
+is a small ring of pages over a directory of **32-page segment files**
+(`pg_xact/`, `pg_multixact/`, ...). PG 17 made their buffer pools
+configurable and **bank-partitioned** the locks (banks of 16 pages), after a
+decade of clog-lock contention war stories at high transaction rates. Their
+truncation is tied to vacuum's frozen horizons — another reason wraparound
+stalls are systemic, not cosmetic.
+
+### 13.12 Error handling and the elog discipline
+
+`ereport()` is severity-routed: `ERROR` longjmps to the nearest
+`PG_TRY`/sigsetjmp frame and aborts the transaction (memory contexts and
+resource owners — `resowner.c`, which tracks buffer pins, file handles, and
+locks — make this safe to do from almost anywhere); `FATAL` exits the
+backend after cleanup; `PANIC` takes down the whole cluster into crash
+recovery, reserved for shared-state corruption (e.g., failure inside a WAL
+"critical section" — `START_CRIT_SECTION()` promotes any ERROR to PANIC,
+because a half-applied shared-buffer change cannot be rolled back). This
+promotion rule is why the buffer-modification protocol is rigidly: pin →
+lock → `START_CRIT_SECTION` → mutate page + `XLogInsert` → set page LSN →
+`END_CRIT_SECTION` → unlock. Every WAL-logged change in the tree follows
+that exact shape, and reviewers reject patches that don't.
 
 ---
 
