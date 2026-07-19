@@ -6,6 +6,22 @@
 
 ---
 
+## Deep-Dive Series
+
+This file is the survey and index. Each area is developed at staff/principal depth — protocol mechanics, formulas, invariants, and failure modes — in its own file:
+
+| # | File | Covers |
+|---|---|---|
+| 1 | [01-foundations-time-and-ordering.md](01-foundations-time-and-ordering.md) | CAP proof intuition & misreadings, PACELC, FLP valence argument, consistency-model hierarchy, Lamport/vector clocks, TrueTime & commit wait |
+| 2 | [02-partitioning-and-replication.md](02-partitioning-and-replication.md) | Consistent hashing & Dynamo's three partitioning strategies, preference lists, quorum math, sloppy quorum/hinted handoff/read repair/Merkle anti-entropy, CRDTs (CvRDT/CmRDT) |
+| 3 | [03-consensus-raft-and-spanner.md](03-consensus-raft-and-spanner.md) | Raft end-to-end: elections, log matching, the Figure-8 commit rule, joint consensus, snapshots, client sessions, linearizable reads; Spanner's Paxos+2PC+TrueTime stack; where consensus belongs |
+| 4 | [04-membership-failure-detection-gossip.md](04-membership-failure-detection-gossip.md) | SWIM protocol walkthrough (ping-req, suspicion, incarnations, round-robin bound), phi accrual, detection-vs-membership separation |
+| 5 | [05-exactly-once-and-stream-processing.md](05-exactly-once-and-stream-processing.md) | Kafka idempotent producer & transaction coordinator internals (epochs, markers, LSO), watermarks/triggers, Flink barrier alignment & unaligned checkpoints, end-to-end exactly-once composition, backpressure |
+| 6 | [06-overload-control-and-resilience.md](06-overload-control-and-resilience.md) | Load modeling, criticality propagation, client-side throttling formula, retry budgets, jitter algorithms with simulation results, shedding/degradation, cascading & metastable failures |
+| 7 | [07-tail-latency-and-ha-architecture.md](07-tail-latency-and-ha-architecture.md) | Hedged/tied requests with benchmark numbers, micro-partitions, probation, cells & shuffle sharding, static stability, tracing/SLOs/chaos/TLA+ |
+
+---
+
 ## Table of Contents
 
 1. [Definitions & Goals](#1-definitions--goals)
