@@ -24,6 +24,18 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 | [Flink Internals](analytics/flink-internals.md) | Apache Flink — internal implementation details |
 | [Presto Architecture](analytics/presto-technical-architecture.md) | Presto (prestodb) — technical architecture deep dive |
 
+## Fundamentals
+
+| Note | Topic |
+|---|---|
+| [Probabilistic Data Structures](fundamentals/probabilistic-data-structures.md) | Overview, taxonomy & decision guide — start here |
+| [Bloom Filters & Cuckoo Filters](fundamentals/bloom-filters.md) | Approximate membership — Bloom, counting, blocked, Ribbon, cuckoo |
+| [HyperLogLog](fundamentals/hyperloglog.md) | Cardinality estimation — FM sketch, LogLog, HLL, HLL++ |
+| [Count-Min Sketch & Heavy Hitters](fundamentals/count-min-sketch.md) | Frequency estimation — Count-Min, Count Sketch, SpaceSaving, TinyLFU |
+| [Quantile Sketches](fundamentals/quantile-sketches.md) | Percentile estimation — t-digest, DDSketch, KLL |
+| [MinHash, SimHash & LSH](fundamentals/minhash-simhash-lsh.md) | Similarity sketches & near-duplicate detection |
+| [Skip Lists](fundamentals/skip-lists.md) | Probabilistic balancing with exact answers |
+
 ## AI
 
 | Note | Topic |
