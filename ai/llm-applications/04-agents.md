@@ -217,3 +217,52 @@ stays managed but tool execution polls outbound from your container).
   task budgets, full-spec-up-front long-horizon guidance.
 - Anthropic Managed Agents documentation — permission policies, outcomes/rubric
   grading, sessions/events, self-hosted sandboxes.
+
+---
+
+## 9. Durable agent execution
+
+Implement an agent as an explicit state machine, not an opaque recursive function.
+Persist an append-only run log containing messages, normalized model responses, tool
+requests, admission decisions, results, checkpoints, and outcome. Useful states are
+`RUNNING`, `WAITING_FOR_TOOL`, `WAITING_FOR_APPROVAL`, `WAITING_FOR_USER`,
+`SUCCEEDED`, `FAILED`, `CANCELLED`, and `EXPIRED`.
+
+Make transitions idempotent. Assign an operation key before a side effect, persist
+intent, execute, and persist the result. After a crash, reconcile uncertain external
+state rather than blindly repeat the action.
+
+Enforce hard budgets outside the model: wall-clock time, model/tool calls, tokens,
+cost, repeated identical actions, and consecutive errors. Trusted code—not the
+model—decides whether a run is terminal.
+
+Every tool contract should define purpose, preconditions, authorization scope,
+schema, timeout, side effects, idempotency, retry class, error taxonomy, sensitivity,
+and approval policy. Prefer `issue_refund(order_id, amount, reason)` to unrestricted
+HTTP, SQL, or shell access.
+
+### Autonomy levels
+
+| Level | Capability | Control |
+|---|---|---|
+| 0 | advise | user executes |
+| 1 | prepare | preview/diff |
+| 2 | reversible low-risk action | policy gate and audit |
+| 3 | consequential action | explicit approval/separation of duties |
+| 4 | bounded autonomous operation | narrow scope, monitoring, kill switch |
+
+Set autonomy per tool and situation, not once for an entire agent.
+
+## 10. Trajectory evaluation
+
+Grade more than the final answer: tool choice and arguments, ordering, policy
+compliance, recovery, redundancy, budget, and required external state. Replay saved
+tool results for deterministic regressions and use sandboxed integration tests for
+end-to-end behavior.
+
+### Cross-provider and research sources
+
+- [OpenAI, *A practical guide to building agents*](https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf).
+- [Yao et al., *ReAct*](https://arxiv.org/abs/2210.03629).
+- [AWS, *Agentic AI Lens*](https://docs.aws.amazon.com/wellarchitected/latest/agentic-ai-lens/agentic-ai-lens.html).
+- [OWASP, *Agentic AI Security Initiative*](https://genai.owasp.org/initiatives/agentic-security-initiative/).

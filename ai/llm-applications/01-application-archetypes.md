@@ -261,3 +261,39 @@ only for control the runner's hooks don't expose.
 - Anthropic platform docs: agent-design guidance (complexity/value/viability/cost-of-error
   gate), Batch API limits and pricing, structured outputs, multi-agent constraints
   (Managed Agents documentation).
+
+---
+
+## Cross-provider extension: capability and risk taxonomy
+
+The tiers above describe **control flow**. A principal-level review should also
+classify the system along independent axes; private data implies retrieval and
+authorization, for example, but does not by itself imply an agent.
+
+| Axis | Low end | High end | Architecture consequence |
+|---|---|---|---|
+| Knowledge freshness | supplied input | live/private corpus | retrieval or read-only tools |
+| Action authority | answer only | irreversible action | authorization, approval, idempotency, audit |
+| Control-flow uncertainty | fixed transform | unknown steps | workflow first; bounded agent when measured |
+| Verifiability | subjective prose | executable/testable | automatic validators and feedback loops |
+| Duration | one request | hours/days | durable execution, checkpoints, resumability |
+| Data sensitivity | public | regulated/tenant-private | isolation, retention, redaction, ACL filtering |
+
+Additional product families include **copilots** (human decides; model drafts),
+**knowledge assistants** (retrieval and grounded synthesis), **document
+intelligence** (parse, extract to schema, validate, exception queue), **decision
+support** (evidence and alternatives without silent high-impact decisions),
+**content pipelines** (generate, critique, policy-check, publish), **natural-language
+interfaces** (translate intent to constrained queries/API calls), and **autonomous
+operators** (bounded, observable and reversible action).
+
+Before implementation, record the business outcome, non-LLM baseline, minimum
+quality, latency/cost budgets, data classification, permissible actions, evaluation
+method, rollback path, and evidence that a simpler tier was insufficient.
+
+### Cross-provider sources
+
+- [OpenAI, *A practical guide to building agents*](https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf).
+- [Microsoft, *Design and develop a RAG solution*](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-solution-design-and-evaluation-guide).
+- [AWS, *Generative AI Lens: design principles*](https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/design-principles.html).
+- [Yao et al., *ReAct*](https://arxiv.org/abs/2210.03629).

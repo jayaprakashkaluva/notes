@@ -220,3 +220,56 @@ Minimum viable telemetry for any LLM product:
   handling, excessive agency taxonomy.
 - Anthropic model migration guides — instruction-following shifts across
   generations, long-turn latency planning, eval-gated upgrades.
+
+---
+
+## 8. Production reference architecture
+
+Keep deterministic responsibilities outside the model boundary:
+
+1. **Edge/API:** authentication, tenant resolution, quotas, size limits.
+2. **Orchestrator:** routing, deadlines, state machine, budgets, provider adapter.
+3. **Context service:** dialogue state, retrieval, memory, token budget, provenance.
+4. **Policy/tool gateway:** authorization, validation, approvals, idempotency, egress
+   controls, and audit.
+5. **Model gateway:** allowlists, regional/data routing, rate limits, retries, circuit
+   breaking, normalized telemetry, and configuration versions.
+6. **Evaluation plane:** traces, quality sampling, red-team cases, cost allocation,
+   and release gates.
+
+The model proposes content or actions. Trusted services authenticate, authorize,
+enforce invariants, and commit side effects.
+
+## 9. SLOs and failure engineering
+
+Define separate SLOs for availability, latency, and quality. HTTP 200 can still be
+factually unsupported or contain a wrong tool call. Track task success, groundedness,
+correct abstention, tool-call correctness, policy violations, p95 latency, and cost
+per successful task.
+
+Use deadline-aware retries with exponential backoff and jitter. Retry only known-safe
+operations; replaying a turn after a side effect requires idempotency/reconciliation.
+Use per-route/tenant bulkheads, circuit breakers, bounded queues, admission control,
+and load shedding.
+
+## 10. Evaluation, release, and threat governance
+
+Maintain capability, regression, adversarial/safety, and operational-failure suites.
+Segment results by language, use case, input length, tenant class, and risk. Release
+prompts, models, retrieval, and tool schemas through shadow traffic or canaries;
+compare quality, latency, cost, and safety, with automatic rollback criteria and
+emergency model/tool disable switches.
+
+Threat-model sensitive disclosure, insecure output handling, supply-chain compromise,
+data/model poisoning, prompt injection, token/tool-amplification denial of service,
+excessive agency, and vector/embedding weaknesses. Map each to preventive controls,
+detection, response playbook, and owner. Red-team the composed application, not only
+the base model.
+
+### Cross-provider and standards sources
+
+- [NIST, *AI RMF 1.0*](https://doi.org/10.6028/NIST.AI.100-1) and [*Generative AI Profile*](https://doi.org/10.6028/NIST.AI.600-1).
+- [OWASP, *Top 10 for LLM Applications*](https://genai.owasp.org/llm-top-10/).
+- [AWS, *Generative AI Lens*](https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/generative-ai-lens.html).
+- [Microsoft Foundry, *Observability in generative AI*](https://learn.microsoft.com/en-us/azure/foundry/concepts/observability).
+- [Microsoft, *Planning red teaming for LLM applications*](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/red-teaming).

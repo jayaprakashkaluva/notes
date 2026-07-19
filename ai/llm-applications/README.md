@@ -41,3 +41,22 @@ compounding errors. Every document in this set follows that gradient.
 
 Facts that are cached snapshots (model IDs, prices) are dated where stated; verify
 against the live Models API / pricing page before relying on them for decisions.
+
+## Expanded source base
+
+The original notes are retained. The added sections introduce corroborating and
+complementary guidance from OpenAI's agent/API guides, Microsoft Azure Architecture
+Center's RAG guidance, AWS Well-Architected Generative AI and Agentic AI lenses,
+NIST AI RMF 1.0 and its Generative AI Profile, OWASP, and the foundational RAG and
+ReAct papers. Each chapter links directly to its new sources.
+
+## Using the set in a design review
+
+Start with the archetype, then review the API boundary, retrieval design (when
+knowledge is external), agent design (when control flow is model-directed), and
+production controls. Require measurable acceptance criteria, a non-LLM or simpler-
+tier baseline, data and threat models, latency/cost budgets, evaluation suites,
+rollout/rollback, and an owner for production quality.
+
+Vendor-specific model IDs, prices, limits, quotas, and beta features remain dated
+snapshots and must be checked against current provider documentation before adoption.
