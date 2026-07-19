@@ -263,3 +263,43 @@ overflow and choose chunking/summarization deliberately.
   instruction-following shifts across model generations).
 - Pricing/economics figures (cache multipliers, batch discount) per Anthropic
   pricing documentation, snapshot mid-2026 — verify before cost modeling.
+
+---
+
+## 11. Provider-neutral request architecture
+
+Put provider SDKs behind an internal contract containing ordered content, tool
+schemas, output schema, capability requirements, deadline, token/cost budget,
+tenant/trace IDs, and a normalized result: text, structured data, tool requests,
+finish reason, usage, safety outcome, and provider request ID. Keep a portable core
+plus explicit capability flags; do not erase meaningful provider differences.
+
+Boundary invariants:
+
+1. Validate tool arguments in application code even when the API enforces a schema;
+   schema validity is neither authorization nor business validity.
+2. Separate model **tool selection**, policy **tool admission**, and trusted-code
+   **tool execution**.
+3. Propagate deadlines and cancellation into tools.
+4. Store large artifacts outside conversation history and pass bounded extracts or
+   stable references. Context windows are not databases.
+5. Version prompts, schemas, retrieval configuration, model snapshots, and policies
+   as one deployable configuration.
+
+## 12. Prompt, context, and model adaptation
+
+Treat a production prompt as software configuration: owner, version, changelog,
+eval suite, and rollback. Split stable policy from task data, delimit untrusted
+content, and define the output contract. Prompts must never enforce permissions.
+
+Budget context explicitly among instructions, dialogue, evidence, tool results, and
+output. Truncate by semantic priority and record omissions. Improve systems in the
+empirically tested order: prompt/context → retrieval/tools → routing/stronger model
+→ fine-tuning. Fine-tuning fits stable behavior or specialization; it is not a good
+store for frequently changing facts.
+
+### Cross-provider sources
+
+- [OpenAI, *Function calling*](https://platform.openai.com/docs/guides/function-calling) and [*Structured Outputs*](https://platform.openai.com/docs/guides/structured-outputs).
+- [Google Cloud, *Generative AI architecture*](https://cloud.google.com/architecture/ai-ml/generative-ai).
+- [AWS, *Generative AI Lens: performance efficiency*](https://docs.aws.amazon.com/wellarchitected/latest/generative-ai-lens/performance-efficiency.html).

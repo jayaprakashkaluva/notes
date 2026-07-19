@@ -185,3 +185,48 @@ you which stage broke.
 - BM25/hybrid-search and cross-encoder reranking: standard IR literature
   (Robertson & Zaragoza on BM25; bi- vs cross-encoder distinction from the
   sentence-transformers line of work).
+
+---
+
+## 10. Production retrieval architecture
+
+Separate ingestion from serving. The **control plane** owns sources, connectors,
+parser/embedding/index versions, ACL mappings, re-index jobs, and quality reports.
+The **data plane** owns query normalization, authorization filters, candidate
+retrieval, fusion/reranking, context packing, generation, and citations.
+
+Every chunk needs an immutable source and chunk ID, content hash/version,
+tenant/security labels, canonical URI/title, effective timestamps, parser/chunker/
+embedding versions, and source offsets for citations. This lineage enables deletion,
+re-indexing, incident analysis, and citation repair.
+
+Apply the caller's authorization **during retrieval**, not after generation. Preserve
+tenant boundaries in indexes, caches, eval data, and traces. Retrieved text is
+untrusted and can contain prompt injection even when it came from an internal source.
+
+### Evaluate the layers separately
+
+| Layer | Measures | Failure isolated |
+|---|---|---|
+| Ingestion | parse coverage, freshness lag, ACL accuracy | missing/stale knowledge |
+| Retrieval | recall@k, MRR, nDCG | evidence not found or ranked |
+| Packing | evidence coverage, duplication, token use | evidence lost before generation |
+| Generation | groundedness, relevance, completeness | evidence ignored or distorted |
+| Citation | entailment, source/span validity | citation does not support claim |
+| End to end | success, correct abstention, latency, cost | product outcome |
+
+A correct answer does not prove retrieval worked: the model may know it from
+training. Include corpus-specific, recently changed, and intentionally unanswerable
+questions. Require abstention when evidence is absent.
+
+Use blue/green indexes when changing embeddings, chunking, or schema. Build, run
+offline and end-to-end evals, canary traffic, then promote. Trace the exact index
+version. Deletion must be verifiable across raw data, chunks, vectors, caches, and
+replicas.
+
+### Cross-provider and research sources
+
+- [Lewis et al., *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*](https://arxiv.org/abs/2005.11401).
+- [Microsoft, *RAG solution design and evaluation guide*](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-solution-design-and-evaluation-guide).
+- [Azure AI Search, *RAG overview*](https://learn.microsoft.com/en-us/azure/search/retrieval-augmented-generation-overview).
+- [NIST, *Generative AI Profile (AI 600-1)*](https://doi.org/10.6028/NIST.AI.600-1).
