@@ -163,7 +163,12 @@ loop until accepted or budget exhausted.
 
 The model runs a loop: plan → call tool(s) → observe results → repeat, until it
 decides the task is done. Your code executes tools and feeds results back; the
-*model* owns control flow. Covered in depth in doc 04.
+*model* owns control flow. Covered in depth in doc 04. The research origin of
+this loop is the **ReAct** pattern (Yao et al., ICLR 2023): interleave
+free-form *reasoning traces* with environment *actions* so that reasoning
+creates and adjusts the plan while actions ground the reasoning in retrieved
+fact — the paper showed this beats acting without reasoning and hallucinates
+far less than reasoning without acting (doc 04 §11.1).
 
 **The four-question gate** (from Anthropic's agent-design guidance) — build an
 agent only if all four answers are yes:
