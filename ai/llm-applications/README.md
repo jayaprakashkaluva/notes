@@ -50,6 +50,21 @@ Center's RAG guidance, AWS Well-Architected Generative AI and Agentic AI lenses,
 NIST AI RMF 1.0 and its Generative AI Profile, OWASP, and the foundational RAG and
 ReAct papers. Each chapter links directly to its new sources.
 
+Doc 04 additionally incorporates four reference works in depth:
+
+- Yao et al., *ReAct: Synergizing Reasoning and Acting in Language Models*
+  (ICLR 2023) — the research origin of the agent loop; grounding vs.
+  hallucination findings and failure-mode analysis (doc 04 §11.1).
+- Schick et al., *Toolformer: Language Models Can Teach Themselves to Use
+  Tools* (2023) — self-supervised tool-use learning and the origin of the
+  inference-time tool-call loop (doc 04 §11.2, doc 02 §3).
+- Park et al., *Generative Agents: Interactive Simulacra of Human Behavior*
+  (UIST 2023) — the memory stream, recency/importance/relevance retrieval,
+  reflection, and recursive planning (doc 04 §12.2).
+- LangChain, *Memory overview* (conceptual docs) — short/long-term memory,
+  the semantic/episodic/procedural taxonomy, profile vs. collection, and
+  hot-path vs. background memory writes (doc 04 §12.1).
+
 ## Using the set in a design review
 
 Start with the archetype, then review the API boundary, retrieval design (when

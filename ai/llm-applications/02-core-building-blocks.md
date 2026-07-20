@@ -106,6 +106,12 @@ Facts that matter in production (from the tool-use docs):
   modification, and retries. "I need control" is rarely a reason to hand-roll
   the loop; do so only for custom transports or control flow the hooks can't
   express.
+- **Research origin.** The generate-until-call → pause → execute → insert
+  result → resume-decoding shape of this loop comes from *Toolformer* (Schick
+  et al., 2023), which also established that tool-call usefulness is
+  measurable — a call is worth making iff its result improves the model's
+  subsequent output — and that what humans find useful may differ from what
+  a model finds useful. Details in doc 04 §11.2.
 
 ### Scaling the tool set
 
