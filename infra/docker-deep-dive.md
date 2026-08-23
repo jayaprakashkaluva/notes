@@ -20,12 +20,13 @@ containers.
 8. [Dockerfiles and the Build System (BuildKit)](#8-dockerfiles-and-the-build-system)
 9. [Networking](#9-networking)
 10. [Storage: Volumes, Bind Mounts, tmpfs](#10-storage)
-11. [Registries and Image Distribution](#11-registries-and-image-distribution)
-12. [Security Model](#12-security-model)
-13. [Docker Compose and Multi-Container Apps](#13-docker-compose)
-14. [What Docker Is Not: VMs, Kubernetes, and the OCI Ecosystem](#14-what-docker-is-not)
-15. [Expert-Level Details, Gotchas, and Best Practices](#15-expert-level-details-gotchas-and-best-practices)
-16. [Command Reference](#16-command-reference)
+11. [What Can (and Can't) Run in a Container — Including Stateful Apps](#11-what-can-and-cant-run-in-a-container)
+12. [Registries and Image Distribution](#12-registries-and-image-distribution)
+13. [Security Model](#13-security-model)
+14. [Docker Compose and Multi-Container Apps](#14-docker-compose)
+15. [What Docker Is Not: VMs, Kubernetes, and the OCI Ecosystem](#15-what-docker-is-not)
+16. [Expert-Level Details, Gotchas, and Best Practices](#16-expert-level-details-gotchas-and-best-practices)
+17. [Command Reference](#17-command-reference)
 
 ---
 
@@ -222,7 +223,7 @@ Two corollaries:
 - **Isolation is a kernel feature, so its strength is a kernel property.**
   A kernel exploit escapes all containers on the host. VMs have a stronger
   isolation boundary (hardware-assisted). This is the fundamental
-  container-vs-VM security tradeoff (§12).
+  container-vs-VM security tradeoff (§13).
 
 ---
 
@@ -244,7 +245,7 @@ syscalls with `CLONE_NEW*` flags.
 | **Network** (`net`) | `CLONE_NEWNET` | Interfaces, IPs, routing tables, ports. A fresh netns has only a loopback device; Docker wires it up with virtual ethernet pairs (§9). Two containers can both bind "port 80" without conflict. |
 | **UTS** | `CLONE_NEWUTS` | Hostname and domain name. Why your container has its own hostname (by default, the container ID). |
 | **IPC** | `CLONE_NEWIPC` | System V IPC and POSIX message queues. |
-| **User** | `CLONE_NEWUSER` | UID/GID mappings. Allows "root inside the container" to map to an unprivileged UID on the host — a major hardening feature (not enabled by default in Docker; see §12). |
+| **User** | `CLONE_NEWUSER` | UID/GID mappings. Allows "root inside the container" to map to an unprivileged UID on the host — a major hardening feature (not enabled by default in Docker; see §13). |
 | **Cgroup** | `CLONE_NEWCGROUP` | The visible cgroup hierarchy. |
 | **Time** | `CLONE_NEWTIME` | Boot/monotonic clock offsets (newer kernels). |
 
@@ -396,7 +397,7 @@ Key facts:
 - **The CLI is thin.** Everything is the daemon's REST API
   (`curl --unix-socket /var/run/docker.sock http://localhost/containers/json`).
   This is also why mounting `docker.sock` into a container grants full
-  control of the host (§12).
+  control of the host (§13).
 - **`docker build` context**: the client tars up the build context directory
   and ships it to the daemon — which is why a stray `node_modules` makes
   builds slow, and why `.dockerignore` matters.
@@ -559,7 +560,7 @@ container B (eth0 172.17.0.3) ─veth─┤── docker0 bridge (172.17.0.1) �
 
 `docker network create mynet` gives you a separate bridge **plus an embedded
 DNS server**: containers on it resolve each other **by container name**
-(`ping db` just works). The default bridge lacks this. Compose (§13) creates
+(`ping db` just works). The default bridge lacks this. Compose (§14) creates
 one per project automatically — which is why services address each other as
 `http://api:3000` in Compose files. Containers on different user-defined
 networks are isolated from each other at the firewall level — networks
@@ -603,7 +604,136 @@ Facts that matter:
 
 ---
 
-## 11. Registries and Image Distribution
+## 11. What Can (and Can't) Run in a Container
+
+The rule of thumb falls straight out of §3: **if it can run as a Linux
+userspace process, it can run in a container.** A container adds no
+restriction on *what kind* of program runs — only on what that program can
+see and use. So the interesting question is never "is this app
+containerizable?" but "does anything this app needs cross the boundaries a
+container draws?" (the kernel, the hardware, the host's lifecycle).
+
+### 11.1 The easy cases
+
+- **Stateless network services** — web servers, APIs, proxies, workers.
+  The canonical fit: no local state, so containers can be killed, replaced,
+  and scaled freely.
+- **Batch jobs and CLI tools** — a container as a "portable executable":
+  `docker run --rm -v "$PWD:/work" ffmpeg ...` runs a tool with all its
+  dependencies without installing anything on the host. Same trick powers
+  CI systems: every build step runs in a fresh container.
+- **Dev environments and CI** — compilers, test suites, linters pinned to
+  exact versions per project.
+- **GPU / ML workloads** — with the NVIDIA Container Toolkit,
+  `docker run --gpus all ...` passes GPUs through; this is the standard
+  packaging for ML training and inference stacks.
+- **GUI apps, even** — by forwarding the X11/Wayland socket or running
+  VNC/noVNC inside; headless browsers for testing (Playwright, Selenium)
+  are shipped this way as a matter of course.
+
+### 11.2 Stateful applications: databases and message brokers — yes
+
+The most common misconception about Docker: "containers are ephemeral,
+therefore you can't run a database or a broker in one." The premise is
+right and the conclusion is wrong, because it conflates two things §5 and
+§10 keep separate:
+
+> The **container** (process + writable layer) is ephemeral by design.
+> The **volume** is not. A stateful app in Docker is an ephemeral *engine*
+> attached to persistent *data*.
+
+A volume is a plain directory on the host (or a plugin-backed device) —
+native filesystem, real `fsync` durability, and **no overlayfs copy-up on
+the data path**, so the IO characteristics are those of the host, not of
+the layered image. Postgres, MySQL, MongoDB, Redis, Kafka, and RabbitMQ all
+publish official images, and this is exactly the pattern the Compose
+example in §14 shows: `postgres:16` with `pgdata:/var/lib/postgresql/data`.
+Upgrading the database = stop the old container, start a new one from the
+new image, attach the **same volume**. The engine is cattle; the data is
+the pet.
+
+So why the folklore? Because state removes the properties that make
+containers *operationally* trivial, and adds real work:
+
+1. **Storage lifecycle discipline.** For a stateless service, `docker rm`
+   is always safe. For a database, the dangerous commands are
+   `docker volume rm` and `docker volume prune` — and backups become a
+   statement about the volume (or better, about `pg_dump`-style logical
+   backups), not about the container.
+2. **Identity and discovery.** Clients need a stable address. On one host,
+   user-defined network DNS (§9.2) solves it — the container named `db` is
+   always `db`. Across hosts, stable identity is an orchestration feature
+   (see below).
+3. **Clustering is the hard part — and it isn't Docker's part.** Ordered
+   bootstrap, quorum, leader election, partition rebalancing (Kafka),
+   replica promotion (Postgres) are hard *with or without* containers.
+   Containerizing a clustered datastore is easy; operating one is not, and
+   the difficulty is identical on bare metal.
+4. **Resource limits interact badly with naive configs.** Hitting the
+   cgroup memory limit means SIGKILL mid-write (§4.2). Size limits
+   deliberately, and configure the engine for its cgroup, not the host:
+   `shared_buffers` for Postgres, container-aware heap for JVM brokers
+   like Kafka (§16, item 11).
+5. **Shutdown grace.** The default `docker stop` gives 10 seconds before
+   SIGKILL (§7). A database flushing dirty pages or a broker draining
+   in-flight messages may need more: set `--stop-timeout` (or Compose
+   `stop_grace_period`) generously, and make sure the engine — not a
+   shell — is PID 1 so SIGTERM actually arrives.
+6. **Know your IO environment.** On native Linux, volume IO is host-speed.
+   On Docker Desktop (Mac/Windows), bind mounts cross a VM boundary (§6) —
+   fine for dev, but never benchmark or draw performance conclusions
+   there; named volumes (which live inside the VM's filesystem) are much
+   faster than bind mounts for database data in that setup.
+
+Practical decision ladder:
+
+| Scenario | Verdict |
+|----------|---------|
+| Dev / CI databases and brokers | Unequivocally yes — this is one of Docker's killer use cases. Fresh, disposable, exact-version Postgres/Kafka per test run (see also Testcontainers). |
+| Single-host production | Yes, and routinely done: named volume + memory limits + `--restart unless-stopped` + real backup strategy + generous stop timeout. |
+| Clustered, multi-node production | Containers are fine — the question is the operator. Kubernetes **StatefulSets** exist precisely for this: stable per-replica identity (`kafka-0`, `kafka-1`), per-replica PersistentVolumes, ordered rollout. Or skip self-operation entirely with a managed service (RDS, MSK, ...). The choice is operational capacity, not container capability. |
+
+### 11.3 Possible, but usually the wrong tool
+
+- **Full-OS "system containers"** (systemd, sshd, cron, multiple services in
+  one container): possible — LXC specializes in exactly this — but with
+  Docker you're rebuilding a VM badly (§16, item 13). If you need a
+  machine, use a VM or LXC.
+- **Docker-in-Docker** for CI: works (`docker:dind` or mounting the host
+  socket), but the socket mount is host-root equivalent (§13) — understand
+  what you're granting before wiring it into shared CI.
+- **Hard-realtime or exotic scheduling/latency workloads**: the kernel
+  features are reachable, but you'll spend your time fighting cgroup and
+  runtime defaults.
+
+### 11.4 Cannot run in a container
+
+Everything here follows from one fact: a container **shares the host
+kernel** (§3).
+
+- **A different OS's binaries.** No Windows or macOS applications on a
+  Linux host — there is no Windows kernel to service their syscalls.
+  (Windows *hosts* can run Windows containers against the Windows kernel;
+  macOS can't host containers natively at all — Docker Desktop runs a
+  Linux VM.)
+- **Kernel modules and drivers.** A container can't load kernel code —
+  and if you force it with `--privileged`, you're modifying the *host's*
+  kernel for everyone, which is the point at which you wanted a VM.
+- **A different kernel version or kernel-tuning scope.** Apps that require
+  specific kernel builds, or need to set global sysctls, affect the whole
+  host. (Corollary in the other direction: because the Linux syscall ABI
+  is backward-compatible, *old* userspace images run fine on new kernels —
+  that's why a CentOS 7-based image still runs on a 2026 host.)
+- **Anything needing raw platform access** — BIOS/UEFI, firmware, direct
+  privileged hardware manipulation.
+
+If it's not on this list, it runs. The container question is only ever
+"how much operational care does its state and lifecycle need?" — which is
+the stateless/stateful axis of §11.2, not a yes/no on containerization.
+
+---
+
+## 12. Registries and Image Distribution
 
 A **registry** is an HTTP content-addressed blob store speaking the OCI
 Distribution API: Docker Hub, GHCR, ECR/GCR/ACR, or self-hosted
@@ -632,7 +762,7 @@ registry.example.com:5000 / team/app : 1.4.2 @ sha256:8f3e...
 
 ---
 
-## 12. Security Model
+## 13. Security Model
 
 Layered summary of what stands between a containerized process and the host:
 
@@ -664,7 +794,7 @@ What an expert must know:
 
 ---
 
-## 13. Docker Compose
+## 14. Docker Compose
 
 Real applications are several containers: app + database + cache + proxy.
 Compose declares them in one YAML file and manages them as a unit.
@@ -707,7 +837,7 @@ self-healing, rolling deploys across a fleet) is Kubernetes' job.
 
 ---
 
-## 14. What Docker Is Not
+## 15. What Docker Is Not
 
 ### Docker vs virtual machines
 
@@ -743,7 +873,7 @@ the concepts transfers across all of them.
 
 ---
 
-## 15. Expert-Level Details, Gotchas, and Best Practices
+## 16. Expert-Level Details, Gotchas, and Best Practices
 
 The condensed list of things that separate "uses Docker" from "understands
 Docker":
@@ -760,7 +890,7 @@ Docker":
    history is forever. BuildKit `--mount=type=secret` at build time; env
    vars/secret managers at runtime.
 6. Pin base images (at least minor version; digest for prod). `latest` is a
-   mutable pointer, not "newest release" (§11).
+   mutable pointer, not "newest release" (§12).
 7. Alpine = musl libc: smaller, but Python wheels/glibc binaries may need
    recompilation or fail subtly. `debian:slim` is the safer default.
 
@@ -790,9 +920,9 @@ Docker":
 17. Restart policies (`--restart unless-stopped`) for single-host services —
     Docker's minimal self-healing.
 18. Healthchecks make orchestration meaningful — a running process is not a
-    ready service (§13).
+    ready service (§14).
 19. Mounted-socket and `--privileged` containers are host-root equivalent;
-    audit for them (§12).
+    audit for them (§13).
 
 **Mental models to keep**
 20. A container is a process the kernel is lying to (§3).
@@ -804,7 +934,7 @@ Docker":
 
 ---
 
-## 16. Command Reference
+## 17. Command Reference
 
 ```bash
 # Lifecycle
