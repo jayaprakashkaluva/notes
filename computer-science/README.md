@@ -11,6 +11,7 @@ A self-contained curriculum for someone with **no prior computer science backgro
 | 3 | [Data Structures](03-data-structures.md) | Arrays, lists, hash tables, trees, heaps, graphs | How programs organize data |
 | 4 | [Algorithms](04-algorithms.md) | Big-O, sorting, searching, graphs, dynamic programming | How programs solve problems efficiently |
 | 5 | [Operating Systems](operating-systems.md) | Processes, memory, files, concurrency, the kernel | How programs share one machine |
+| 5b | [Virtualization](virtualization.md) | Hypervisors, VT-x/EPT, virtio, containers, microVMs, live migration | How one machine becomes many (deep dive after OS) |
 | 6 | [Computer Networks](05-computer-networks.md) | IP, TCP, DNS, HTTP, how the internet works | How machines talk to each other |
 | 7 | [Databases](06-databases.md) | Relational model, SQL, transactions, indexing, internals | How data survives and scales |
 | 8 | [Theory of Computation](07-theory-of-computation.md) | Discrete math, automata, computability, P vs NP | What computers can and cannot do |
