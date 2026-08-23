@@ -365,6 +365,148 @@ Consequences worth internalizing:
 | Lifecycle | build → push → pull | create → start → stop → rm |
 | Count | One image → many containers | Each has its own writable layer and namespaces |
 
+### 5.4 Anatomy of an image: manifest, config, and three kinds of IDs
+
+You can take any image apart yourself — this is the fastest way to make the
+format concrete:
+
+```bash
+docker save nginx:1.27 -o nginx.tar && tar tf nginx.tar
+# or, OCI layout without a daemon:
+skopeo copy docker://nginx:1.27 oci:./nginx-oci
+```
+
+Inside you find exactly the three artifacts from §5.1. The **manifest** is a
+small JSON that references everything else by digest:
+
+```json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:3f7d94...",
+    "size": 7023
+  },
+  "layers": [
+    { "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:2d429b...", "size": 29125227 },
+    { "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:8cbb52...", "size": 41374112 }
+  ]
+}
+```
+
+The **config** JSON holds everything the runtime needs to start a container
+from this filesystem, plus the identity of the layer stack:
+
+```json
+{
+  "architecture": "amd64",
+  "os": "linux",
+  "config": {
+    "Env": ["PATH=/usr/local/sbin:...", "NGINX_VERSION=1.27.0"],
+    "Entrypoint": ["/docker-entrypoint.sh"],
+    "Cmd": ["nginx", "-g", "daemon off;"],
+    "ExposedPorts": { "80/tcp": {} },
+    "WorkingDir": "",
+    "User": ""
+  },
+  "rootfs": {
+    "type": "layers",
+    "diff_ids": [ "sha256:9853575...", "sha256:72fefc1..." ]
+  },
+  "history": [
+    { "created_by": "/bin/sh -c #(nop) ADD file:... in /" },
+    { "created_by": "/bin/sh -c apt-get update && apt-get install ..." },
+    { "created_by": "/bin/sh -c #(nop) CMD [\"nginx\" ...]", "empty_layer": true }
+  ]
+}
+```
+
+Note that `layers` (manifest) and `diff_ids` (config) are **different
+digests for the same layers**. There are actually *four* distinct IDs in
+play, and telling them apart resolves most "why doesn't this hash match"
+confusion:
+
+| ID | Hash of what | Lives where | Used for |
+|----|--------------|-------------|----------|
+| **Layer digest** | The *compressed* layer blob (`.tar.gz`) exactly as transferred | Manifest | Registry storage, push/pull dedup, download verification |
+| **diffID** | The *uncompressed* layer tar | Config `rootfs.diff_ids` | Identity of the layer's actual content, independent of compression |
+| **chainID** | Recursive: `chainID(L0)=diffID(L0)`; `chainID(Ln)=sha256(chainID(Ln-1) + " " + diffID(Ln))` | Daemon's layer store (not in the image) | Identity of a *stack* of layers — the same layer on top of different parents produces a different filesystem, so storage is keyed by chain, not by single layer |
+| **Image ID** | The config JSON | What `docker images` shows | Identity of the whole image: since the config embeds all diffIDs, any change to any layer or any config field changes the image ID |
+
+Why two digests per layer? Compression is not canonical — the same tar
+gzipped by two builders can produce different bytes. The diffID pins the
+*content*; the layer digest pins the *transferred blob*. And why is the
+*manifest's* digest the root of trust (`image@sha256:...` references, cosign
+signatures)? Because the manifest transitively covers everything: it hashes
+the config, and the config hashes every layer. Same Merkle-tree logic as a
+git commit hash covering its whole tree.
+
+One image reference can also point at a **manifest list / image index** —
+a fourth JSON that maps platforms (`linux/amd64`, `linux/arm64`) to
+per-platform manifests. That's the multi-arch mechanism from §12, and it's
+why `docker pull python:3.12` gets you the right architecture without your
+asking.
+
+### 5.5 Where images live on disk
+
+On a Linux host with the `overlay2` driver, everything is under
+`/var/lib/docker`:
+
+```
+/var/lib/docker/
+├── overlay2/                      # the actual layer data
+│   ├── <cache-id>/
+│   │   ├── diff/                  # this layer's files (the extracted tar)
+│   │   ├── link                   # short alias (see below)
+│   │   ├── lower                  # colon-separated list of parent layers
+│   │   └── work/                  # overlayfs internal scratch space
+│   ├── <cache-id>-init/           # per-container init layer (/etc/hosts, resolv.conf mounts)
+│   └── l/                         # short symlinks to each diff/ dir —
+│                                  #   overlayfs mount options have a length
+│                                  #   limit and real IDs are 64+ chars
+└── image/overlay2/
+    ├── imagedb/content/sha256/<image-id>     # the config JSONs, verbatim
+    ├── layerdb/sha256/<chain-id>/            # metadata per layer *stack*:
+    │   ├── cache-id               #   → which overlay2/<dir> holds the data
+    │   ├── diff                   #   → this layer's diffID
+    │   ├── parent                 #   → parent chainID
+    │   └── size
+    └── repositories.json          # tag → image ID mapping
+```
+
+Two details worth knowing:
+
+- **The registry-format image doesn't exist on disk.** Compressed blobs are
+  decompressed and discarded during pull; the daemon stores extracted
+  layer directories keyed by chainID → cache-id. `docker push` and
+  `docker save` *re-create* the tars from these directories. (This is also
+  why `docker load`/`save` round-trips preserve diffIDs but pushing can
+  produce different compressed digests than you pulled.)
+- **Whiteouts have two encodings.** In the *tar* format (the portable
+  layer), a deleted file is a zero-length file named `.wh.<name>`, and a
+  directory whose lower contents should be hidden entirely contains
+  `.wh..wh..opq`. On *disk* under overlayfs, the same information is a
+  character device with device number 0:0, and an `trusted.overlay.opaque`
+  xattr on the directory. The daemon translates between the two when
+  packing/unpacking layers.
+
+At container start, the driver assembles the mount you saw in §5.2 —
+concretely, something very close to:
+
+```
+mount -t overlay overlay \
+  -o lowerdir=l/AAA:l/BBB:l/CCC,upperdir=.../<ctr>/diff,workdir=.../<ctr>/work \
+  /var/lib/docker/overlay2/<ctr>/merged
+```
+
+`lowerdir` is the image's layers top-to-bottom, `upperdir` is the
+container's writable layer, and `merged` is the unified view the container
+is pivoted into. `docker inspect <ctr> --format '{{json .GraphDriver}}'`
+shows you these exact paths for a live container.
+
 ---
 
 ## 6. Docker's Architecture
@@ -458,6 +600,120 @@ Stopping (`docker stop`): daemon sends **SIGTERM** to PID 1, waits 10 seconds
 
 `docker rm` deletes the writable layer and metadata. The image is untouched.
 
+The rest of this section zooms into three of those steps — the pull, the
+filesystem assembly, and the runc handoff — because each hides real
+machinery behind one line.
+
+### 7.1 Zooming in: what a pull actually does
+
+`docker run` with a missing image is `docker pull` first. Step by step:
+
+1. **Reference resolution.** `nginx:1.27` expands to
+   `docker.io/library/nginx:1.27` (default registry, default `library/`
+   namespace for official images).
+2. **Auth.** The registry answers the first request with `401` and a
+   `WWW-Authenticate` header naming a token service; the client fetches a
+   short-lived Bearer token scoped to `repository:library/nginx:pull` and
+   retries. (This is why `docker login` stores credentials but pulls still
+   work anonymously for public images.)
+3. **Manifest fetch.** `GET /v2/library/nginx/manifests/1.27`. If the
+   response is a manifest *list*, the client picks the entry matching its
+   platform and fetches that manifest. The digest of these bytes is what a
+   `@sha256:` pin refers to.
+4. **Layer diffing.** For each layer digest in the manifest, the daemon
+   checks its local content store. Already present (from any other image) →
+   skipped entirely. This is the §5.1 dedup made concrete: pulling
+   `myapp:2.0` after `myapp:1.9` typically downloads one or two small
+   layers.
+5. **Parallel download + verify.** Missing blobs download concurrently
+   (3 at a time by default), are checksummed against the manifest digest,
+   decompressed, checksummed *again* against the config's diffID, and
+   extracted into an `overlay2` directory registered under the layer's
+   chainID (§5.4–5.5). A blob failing either checksum aborts the pull —
+   this is why a registry (or a middlebox) can't silently tamper with a
+   digest-pinned image.
+6. **Config stored, tag written.** The config JSON lands in `imagedb`,
+   `repositories.json` maps the tag to the image ID, and `docker images`
+   now lists it.
+
+### 7.2 Zooming in: assembling the container's root filesystem
+
+"Creates the writable layer" in step 3 expands to:
+
+1. Create two directories in `overlay2/`: `<id>-init` and `<id>`.
+2. The **init layer** (`<id>-init`) is a tiny layer holding mount points
+   and stub files Docker must control per-container regardless of the
+   image: `/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf`, `/dev`,
+   `/proc`, `/sys`. At start time, the real files (generated hostname,
+   the network's DNS config) are bind-mounted over these stubs — that's
+   why editing `/etc/resolv.conf` inside a container doesn't touch the
+   image and doesn't survive recreation.
+3. The **overlay mount** stacks: image layers as `lowerdir` (bottom to
+   top), init layer above them, container's `diff/` as `upperdir` (§5.5).
+   Nothing is copied — creating a container is O(1) in image size, which
+   is *the* reason containers start in milliseconds and 100 containers
+   from one image cost ~zero extra disk.
+4. Volumes and bind mounts from `-v`/`--mount` are recorded in the OCI
+   spec as bind mounts to be performed *inside* the container's mount
+   namespace, over the merged rootfs. (Named-volume pre-population — §10 —
+   happens here: if the target dir in the image is non-empty and the
+   volume is fresh, the image content is copied into the volume first.)
+
+### 7.3 Zooming in: containerd, the OCI bundle, and runc
+
+The handoff in steps 4–5 is worth seeing precisely, because it's where
+"Docker" ends and the standardized container stack begins:
+
+1. **dockerd → containerd (gRPC).** dockerd translates its container
+   object into a containerd *task*. containerd writes an **OCI bundle** —
+   a directory (under `/run/containerd/io.containerd.runtime.v2.task/moby/<id>/`)
+   containing `config.json` (the full OCI runtime spec: rootfs path,
+   namespaces to create, cgroup limits, capability set, seccomp profile,
+   mounts, env, uid/gid, the command) and the rootfs mount. `docker
+   inspect` is essentially a prettier view of this spec.
+2. **Shim spawn.** containerd starts `containerd-shim-runc-v2` for this
+   container. The shim is deliberately tiny and long-lived: it holds the
+   container's stdio pipes, its pty if `-t` was given, and collects the
+   exit status. Everything above it (containerd, dockerd) can restart
+   without the container noticing.
+3. **`runc create`.** The shim invokes runc, which forks a `runc init`
+   process. This child creates/joins the namespaces from the spec —
+   namespace creation is `clone()`/`unshare()` with `CLONE_NEW*` flags,
+   and PID-namespace semantics force a two-stage fork (a process can't
+   move *itself* into a new PID namespace; only its children land there).
+   Inside the new namespaces, `runc init`:
+   - joins the container's cgroup (so every resource the process ever uses
+     is accounted from the first instruction);
+   - mounts the rootfs private, performs the spec's mounts (`/proc`,
+     `/sys`, `/dev` with a minimal device set, the volume binds);
+   - `pivot_root(2)`s into the rootfs and unmounts the old root —
+     stronger than `chroot` because the old root becomes genuinely
+     unreachable, not merely hidden;
+   - sets hostname, uid/gid, rlimits;
+   - applies the security clamps *last*, in careful order: drop
+     capabilities, set `no_new_privs`, load the seccomp filter (once
+     loaded, even runc's own remaining syscalls are subject to it);
+   - then **blocks**, waiting on a named pipe (the "exec fifo") — the
+     container now exists in state `Created`: namespaces live, cgroup
+     ready, but user code not yet running.
+4. **`runc start`** writes one byte into that fifo. `runc init` unblocks
+   and calls `execve()` on the image's entrypoint. This is the moment the
+   container "starts," and it explains the `docker create` / `docker
+   start` split: create is expensive setup, start is a nudge. Note what
+   `execve` means here: **runc's process *becomes* your application** —
+   same PID, new program image. There is no wrapper process watching from
+   inside; PID 1 in the container is your app itself, with everything
+   that implies for signals (§7's gotchas).
+5. **runc exits.** The parent runc process is gone within milliseconds;
+   the container process is reparented to the shim. At steady state the
+   per-container overhead on the host is: your process tree + one shim.
+   `ps -ef --forest` on the host shows exactly this.
+
+The API-level view ties it together: `docker run` is nothing but
+`POST /containers/create` → `POST /containers/<id>/start` → (attach or
+wait), which is why `docker create` + `docker start` behaves identically
+and why anything the CLI does, a program holding the socket can do.
+
 ---
 
 ## 8. Dockerfiles and the Build System
@@ -534,6 +790,99 @@ for static binaries).
 - Both should be exec form (JSON array) — see the PID 1 signal gotcha in §7.
 - Convention: `ENTRYPOINT ["myapp"]`, `CMD ["--default-flag"]` makes the
   image behave like a binary.
+
+### 8.5 What actually happens during `docker build`, step by step
+
+The one-line summary of image creation: **a build is a sequence of
+containers.** Each filesystem-changing instruction runs (or is applied) on
+top of the previous result's snapshot, and the *diff* it leaves behind
+becomes a layer. Everything else is caching and bookkeeping around that
+loop. In detail, for `docker build -t myapp:1.0 .`:
+
+1. **Context negotiation.** The classic behavior: the CLI applies
+   `.dockerignore` and tars the entire context directory to the daemon
+   before anything runs. BuildKit improves this: the client opens a
+   long-lived gRPC *session*, and the builder requests files **lazily and
+   incrementally** — only paths actually referenced by `COPY`/`ADD`, and
+   on rebuilds only changed files (rsync-style). `.dockerignore` still
+   matters (it bounds what's *requestable* and keeps `COPY . .`
+   checksumming fast).
+
+2. **Parse → LLB graph.** The Dockerfile is parsed by a *frontend* (the
+   `# syntax=docker/dockerfile:1` line pins which frontend version — it's
+   itself pulled as an image, which is how new Dockerfile features ship
+   without upgrading Docker). The frontend compiles the Dockerfile into
+   **LLB** ("low-level build"), a content-addressed DAG of operations —
+   BuildKit's assembly language. Crucially the unit is the *graph*, not a
+   line-by-line script: independent stages and independent branches are
+   identified here, and **stages nothing depends on are never built at
+   all** (the legacy builder built every stage up to the target).
+
+3. **Solve, with cache lookup per vertex.** BuildKit walks the DAG,
+   computing each vertex's cache key from: the parent result's content
+   digest, the instruction itself, and for `COPY`/`ADD` the checksums of
+   the source files (content, mode, uid/gid — not mtime). A hit means the
+   stored snapshot is reused and the entire subtree short-circuits; a miss
+   executes the vertex. Because keying is by content digest rather than
+   "history so far," identical work shared between stages is deduplicated,
+   and independent vertices execute **in parallel**.
+
+4. **Executing a `RUN`.** This is a real container, created exactly as in
+   §7.3 minus the networking niceties: BuildKit mounts the parent
+   snapshot as the rootfs (lowerdir) with a fresh empty upperdir, and
+   invokes runc on `/bin/sh -c "<your command>"` inside namespaces, with
+   the Dockerfile's current `ENV`/`WORKDIR`/`USER` applied. The command
+   runs to completion; a non-zero exit fails the build at that vertex.
+   What was written to the upperdir *is* the new layer — nothing more.
+   This mechanically explains two §8.2 rules:
+   - files deleted by a later `RUN` still exist in the earlier layer
+     (the later layer only holds a whiteout);
+   - `--mount=type=cache` works by bind-mounting a persistent directory
+     into the build container that is *not* part of the upperdir — hence
+     "cache that never enters the image." `--mount=type=secret` is the
+     same trick with a tmpfs file.
+
+5. **Executing `COPY` / `ADD`.** No container needed: BuildKit applies
+   the files from the context (or `--from=` stage) directly onto a new
+   snapshot layer, preserving the "diff on top of parent" model.
+
+6. **Metadata instructions** (`ENV`, `EXPOSE`, `CMD`, `ENTRYPOINT`,
+   `LABEL`, `USER`, `WORKDIR`, ...) touch no filesystem: they thread an
+   updated config object through the graph and appear in `history` as
+   `empty_layer: true` entries (visible in `docker history` as 0B lines).
+
+7. **Export.** When the target stage's final vertex resolves, the builder
+   materializes an image: walk the snapshot chain, tar each diff, compute
+   diffIDs, assemble the config (diffIDs + accumulated metadata +
+   history), compute the image ID (hash of that config, §5.4), write the
+   manifest, and register the tag. With `--push` the compressed blobs go
+   straight to the registry, skipping any layer the registry already has.
+
+Corollaries that fall out of this model:
+
+- **A layer records *outputs*, not commands.** `RUN apt-get update`
+  produces whatever package lists existed *at build time*; rebuilding
+  with a warm cache reuses those stale bytes forever. Cache-bust
+  deliberately (`--no-cache`, or reorder so the line's inputs change)
+  when you actually want fresh outputs.
+- **Builds are not automatically reproducible.** Same Dockerfile, two
+  machines, no shared cache → apt/pip/npm may resolve different versions,
+  timestamps differ, so digests differ. Reproducibility comes from
+  pinning (lockfiles, base image digests), not from Docker itself.
+- **`docker commit` is the degenerate build.** It snapshots a running
+  container's upperdir as one layer with no recorded recipe — useful for
+  forensics, an anti-pattern for delivery (§5.2).
+- The **legacy builder** (pre-BuildKit) ran the same loop but literally:
+  sequentially, one temp container per instruction, `commit` after each,
+  whole-context upload, no lazy stages, no cache/secret mounts, cache
+  keyed by instruction text + parent image ID. Knowing it explains older
+  documentation and the shape of `docker history` output — but everything
+  you write today should assume BuildKit.
+
+You can watch all of this happen: `docker build --progress=plain .` shows
+the DAG vertices, cache hits (`CACHED`), and parallel execution;
+`docker history <image>` then shows the resulting layer stack with the
+creating instruction and size of each diff.
 
 ---
 
