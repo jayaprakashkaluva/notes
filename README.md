@@ -34,6 +34,7 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 
 | Note | Topic |
 |---|---|
+| [What Happens When You Run a Program](fundamentals/what-happens-when-you-run-a-program.md) | End-to-end trace of `./hello` — shell, fork/exec, ELF loader, scheduler, page faults, CPU pipeline, caches, DRAM, syscalls, exit |
 | [Probabilistic Data Structures](fundamentals/probabilistic-data-structures.md) | Overview, taxonomy & decision guide — start here |
 | [Bloom Filters & Cuckoo Filters](fundamentals/bloom-filters.md) | Approximate membership — Bloom, counting, blocked, Ribbon, cuckoo |
 | [HyperLogLog](fundamentals/hyperloglog.md) | Cardinality estimation — FM sketch, LogLog, HLL, HLL++ |
