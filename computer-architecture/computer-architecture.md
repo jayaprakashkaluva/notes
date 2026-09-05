@@ -32,134 +32,100 @@ Companion notes: [How Computers Work](../computer-science/01-how-computers-work.
 
 # 1 — The Whole Machine on One Page
 
-The diagram below is the master map. Everything else in this document is a zoom into one box or one edge of it. Read it top-down as *software → firmware → silicon → devices*, and read the edges as the four kinds of interaction that exist in a computer:
+The diagram below is the master map. Everything else in this document is a zoom into one box or one edge of it. Read it top-down as *user space → kernel → silicon → memory and devices*, with firmware as the foundation that runs before, beneath, and inside all of it. The numbered edges between the kernel and the hardware are the four kinds of interaction that exist in a computer:
 
-| Edge kind | Mechanism | Direction | Examples |
-|---|---|---|---|
-| **Instruction execution** | CPU fetches and executes code | software → core | every user and kernel instruction |
-| **Trap / interrupt** | hardware forces a control transfer to a kernel handler | core/device → kernel | `SYSCALL`, page fault, NIC IRQ, timer tick |
-| **Memory-mapped I/O (MMIO)** | CPU loads/stores to physical addresses routed to a device instead of DRAM | kernel driver → device | ringing an NVMe doorbell, programming a NIC register |
-| **DMA** | device reads/writes DRAM directly without the CPU | device → memory | NIC writing a received packet into a kernel buffer |
+| # | Edge kind | Mechanism | Direction | Examples |
+|---|---|---|---|---|
+| ① | **Trap into the kernel** | a user-mode instruction deliberately transfers control to ring 0 | user space → kernel | `SYSCALL` / `SVC` for every system call |
+| ② | **Kernel state written into hardware or memory** | privileged register writes, and data structures in DRAM that hardware reads on its own | kernel → CPU / DRAM | loading `CR3`, page tables, NVMe and NIC descriptor rings, DMA buffers |
+| ③ | **Memory-mapped I/O (MMIO)** | loads/stores to physical addresses routed to a device instead of DRAM | kernel driver → device | ringing an NVMe doorbell, programming a NIC register |
+| ④ | **Exceptions and interrupts** | hardware forces a control transfer to a kernel handler | CPU / device → kernel | page fault, NIC IRQ, timer tick, NVMe completion |
 
-Solid arrows are runtime data/control paths; dotted arrows are "produces" or "configures" relationships.
+**DMA** is the device-side counterpart of ②: a device reads and writes DRAM directly without the CPU, through the IOMMU. Within the CPU package, arrows are the data path a load or store follows; within the kernel, arrows are call paths.
 
-```mermaid
-flowchart TB
-    %% ───────────── SOFTWARE ─────────────
-    subgraph USERSPACE["USER SPACE  (Ring 3 / EL0 — unprivileged)"]
-        direction TB
-        APP["Applications<br/>services · CLIs · browsers · DB engines"]
-        RUNTIME["Language runtimes<br/>JVM · CPython · Go · .NET · V8<br/>(GC, JIT, green threads)"]
-        LIBS["System libraries<br/>libc · libm · libpthread · OpenSSL"]
-        LDSO["Dynamic linker / loader<br/>ld.so · vDSO"]
-        TOOLCHAIN["Toolchain<br/>compiler · assembler · linker<br/>(emits ELF / PE / Mach-O)"]
-    end
+```text
+┌─────────────────────────────── USER SPACE  (Ring 3 / EL0, unprivileged) ─────────────────────────────┐
+│                                                                                                      │
+│   Toolchain ──produces──▶  Applications  ◀──loads, relocates──  Dynamic linker (ld.so) + vDSO        │
+│   compiler · linker        services · DBs · browsers                                                 │
+│                                  │                                                                   │
+│                                  ▼                                                                   │
+│                     Language runtimes   JVM · CPython · Go · .NET · V8   (GC, JIT, thread model)     │
+│                                  │                                                                   │
+│                                  ▼                                                                   │
+│                     System libraries    libc · libpthread · libm · OpenSSL   (malloc, futex, stdio)  │
+│                                  │                                                                   │
+└──────────────────────────────────┼───────────────────────────────────────────────────────────────────┘
+                                   │  ① SYSCALL / SVC instruction (trap)         ▲ return value, signals
+┌──────────────────────────────────▼──────── KERNEL  (Ring 0 / EL1, privileged) ─▼─────────────────────┐
+│                                                                                                      │
+│                     System call interface   (ABI, syscall table, vDSO fast paths)                    │
+│            ┌─────────────────┬───────────────┼─────────────────┬──────────────────┐                  │
+│            ▼                 ▼               ▼                 ▼                  ▼                  │
+│      Scheduler        Virtual memory     VFS + page       Network stack      Hypervisor (KVM)        │
+│      run queues       manager            cache            sockets · TCP/IP   VT-x / AMD-V            │
+│      context switch   page tables        ext4 · XFS       netfilter · NAPI   EPT / NPT · virtio      │
+│      cgroups          faults · NUMA          │                  │                  │                 │
+│            ▲                 ▲               ▼                  │                  │                 │
+│            │                 │         Block layer (blk-mq)     │                  │                 │
+│            │                 │               └────────┬─────────┘                  │                 │
+│            │                 │                        ▼                            │                 │
+│            └─────────────────┴──── Exception & interrupt dispatch  ◀────  Device drivers             │
+│              wake-ups           page fault   (IDT / vector table)          MMIO · DMA setup · IRQ    │
+│                                                                                                      │
+└───────┬────────────────┬───────────────────────────┬────────────────────────────┬──────────┬─────────┘
+        │ ② context      │ ② writes page tables      │ ④ traps & IRQ vectors      │ ③ MMIO   │ ② DMA
+        │   switch:      │   (in DRAM), TLB flush    │   (precise exceptions,     │   loads/ │   buffers,
+        ▼   CR3 / TTBR   ▼   VMENTER / VMEXIT        ▲   APIC → IDT)              ▼   stores ▼   rings
+┌───────┴────────────────┴───────────────────────────┴────── CPU PACKAGE / SoC ───┴──────────┴─────────┐
+│                                                                                                      │
+│   ┌──────────────────── Core × N  (each with SMT threads) ────────────────────┐                      │
+│   │                                                                           │   Interrupt          │
+│   │   Front end ────▶ Out-of-order back end ◀───▶ Register files              │   controller         │
+│   │   branch predictor  rename · ROB · schedulers   architectural + physical  │   APIC / GIC         │
+│   │   fetch · decode    ALU · FPU · SIMD · LSU                                │   ◀── MSI-X          │
+│   │   µop cache               │            │                                  │                      │
+│   │                           ▼            ▼                                  │   Power / PMU        │
+│   │                    MMU + TLBs ──▶ L1I / L1D  ◀───▶  L2                    │   DVFS · C-states    │
+│   │                    page walker    32–48 KB, ~4 cy    1–2 MB, ~14 cy       │   RAPL · counters    │
+│   └───────────────────────────────────────────────────────┬───────────────────┘                      │
+│                                                           ▼                                          │
+│                 Shared L3 / LLC   tens of MB, ~40 cy   + snoop filter / directory (MESI coherence)   │
+│                                                           │                                          │
+│                 On-die interconnect  (ring / mesh)  ──── UPI / Infinity Fabric ────▶ other socket    │
+│                           │                                            │                             │
+│                           ▼                                            ▼                             │
+│           Integrated memory controller                  IOMMU (VT-d / SMMU) ◀──▶ PCIe / CXL root     │
+│           DDR5 channels · ECC · scheduling              IOVA → PA for devices     complex            │
+└─────────────────────────┬──────────────────────────────────────────────────────────┬─────────────────┘
+                          │ DDR5 channels                                            │ PCIe lanes / CXL
+┌─────────────────────────▼───────────────┐           ┌──────────────────────────────▼─────────────────┐
+│ MAIN MEMORY   DDR5 DIMMs / HBM          │           │ I/O DEVICES                                    │
+│ ~80–100 ns · 200–500 GB/s per socket    │◀── DMA ── │   GPU / NPU        NVMe SSD       NIC          │
+│                                         │           │   SIMT · HBM       SQ/CQ · FTL    rings · RSS  │
+│ holds: page tables · page cache ·       │── DMA ──▶ │   NVLink           NAND           RDMA         │
+│ NVMe / NIC rings · DMA buffers ·        │           │                                                │
+│ kernel + user code and data             │           │   Chipset / PCH:  USB · SATA · TPM · SPI flash │
+└─────────────────────────────────────────┘           └────────────────────────────────────────────────┘
 
-    subgraph KERNEL["OPERATING SYSTEM KERNEL  (Ring 0 / EL1 — privileged)"]
-        direction TB
-        SYSCALL["System call interface<br/>(SYSCALL / SVC entry, ABI)"]
-        SCHED["Scheduler<br/>(CFS/EEVDF, run queues, context switch)"]
-        VMM["Virtual memory manager<br/>(page tables, faults, mmap, swap, NUMA policy)"]
-        VFS["VFS + page cache<br/>(ext4 · XFS · NTFS · procfs)"]
-        NETSTACK["Network stack<br/>(sockets, TCP/IP, netfilter, NAPI)"]
-        BLOCK["Block layer + I/O schedulers<br/>(blk-mq)"]
-        DRIVERS["Device drivers<br/>(MMIO, DMA setup, IRQ handlers)"]
-        TRAP["Exception & interrupt dispatch<br/>(IDT / vector table)"]
-        KVM["Hypervisor module<br/>(KVM / Hyper-V on VT-x / AMD-V)"]
-    end
-
-    subgraph FIRMWARE["FIRMWARE"]
-        direction LR
-        UEFI["UEFI / BIOS<br/>(SEC · PEI · DXE · boot manager)"]
-        ACPI["ACPI tables + AML runtime<br/>(topology, power, devices)"]
-        UCODE["CPU microcode"]
-        DEVFW["Device firmware<br/>SSD FTL · NIC · GPU · BMC"]
-    end
-
-    %% ───────────── HARDWARE ─────────────
-    subgraph SOC["CPU PACKAGE / SoC"]
-        direction TB
-        subgraph CORE["Core × N  (each with SMT threads)"]
-            direction TB
-            FRONTEND["Front end<br/>branch predictor · I-fetch · decode · µop cache"]
-            BACKEND["Out-of-order back end<br/>rename · ROB · schedulers · ALU / FPU / SIMD · load-store unit"]
-            REGS["Architectural + physical register files"]
-            L1["L1I / L1D  (32–48 KB, ~4 cycles)"]
-            L2["L2  (1–2 MB, ~14 cycles)"]
-            MMU["MMU · TLBs · hardware page walker"]
-        end
-        L3["Shared L3 / LLC  (tens of MB, ~40 cycles)<br/>+ snoop filter / coherence directory"]
-        FABRIC["On-die interconnect<br/>(ring / mesh · Infinity Fabric · UPI links)"]
-        IMC["Integrated memory controller<br/>(DDR5 channels, ECC, scheduling)"]
-        IOMMU["IOMMU  (VT-d / AMD-Vi / SMMU)"]
-        PCIERC["PCIe / CXL root complex"]
-        APIC["Interrupt controller<br/>(APIC / GIC, MSI-X)"]
-        PMU["Power management + PMU counters<br/>(DVFS, C-states, RAPL)"]
-    end
-
-    DRAM[("Main memory<br/>DDR5 DIMMs / HBM<br/>(~80–100 ns)")]
-
-    subgraph IODEV["I/O DEVICES  (PCIe / CXL / chipset)"]
-        direction LR
-        GPU["GPU / NPU / TPU<br/>(SIMT SMs, HBM, NVLink)"]
-        NVME["NVMe SSD<br/>(SQ/CQ pairs, FTL, NAND)"]
-        NIC["NIC / SmartNIC<br/>(RX/TX rings, RSS, offloads, RDMA)"]
-        PCH["Chipset / PCH<br/>USB · SATA · audio · TPM · RTC · SPI flash"]
-        DISPLAY["Display · HID · peripherals"]
-    end
-
-    %% ───────────── SOFTWARE EDGES ─────────────
-    TOOLCHAIN -. "produces binaries" .-> APP
-    LDSO -- "maps & relocates" --> APP
-    APP --> RUNTIME
-    APP --> LIBS
-    RUNTIME --> LIBS
-    LIBS -- "SYSCALL / SVC" --> SYSCALL
-    SYSCALL --> SCHED
-    SYSCALL --> VMM
-    SYSCALL --> VFS
-    SYSCALL --> NETSTACK
-    VFS --> BLOCK --> DRIVERS
-    NETSTACK --> DRIVERS
-    VMM -- "writes page tables" --> MMU
-    SCHED -- "context switch: CR3 / TTBR, register state" --> CORE
-    TRAP -- "wakes / signals" --> SCHED
-    TRAP -- "page fault" --> VMM
-    TRAP -- "IRQ" --> DRIVERS
-    KVM -- "VMENTER · EPT / NPT" --> CORE
-
-    %% ───────────── FIRMWARE EDGES ─────────────
-    UEFI -- "loads bootloader → kernel" --> KERNEL
-    ACPI -- "topology · devices · power states" --> KERNEL
-    UCODE -. "patches" .-> CORE
-    DEVFW -. "runs inside" .-> IODEV
-
-    %% ───────────── HARDWARE EDGES ─────────────
-    FRONTEND --> BACKEND
-    BACKEND <--> REGS
-    BACKEND <--> L1
-    L1 <--> L2
-    MMU -- "VA → PA" --> L1
-    MMU -- "page walk" --> L2
-    L2 <--> L3
-    L3 <--> FABRIC
-    FABRIC <--> IMC
-    IMC <--> DRAM
-    FABRIC <--> IOMMU
-    IOMMU <--> PCIERC
-    PCIERC <--> GPU
-    PCIERC <--> NVME
-    PCIERC <--> NIC
-    PCIERC <--> PCH
-    PCH --> DISPLAY
-    IODEV -- "DMA  (device ↔ memory)" --> IOMMU
-    IODEV -- "MSI-X interrupts" --> APIC
-    APIC -- "vector" --> TRAP
-    DRIVERS -- "MMIO loads/stores to BARs" --> PCIERC
-    PMU -. "DVFS · C-states" .-> CORE
+┌────────────────────────────── FIRMWARE  (runs before, beneath, and inside everything) ───────────────┐
+│   UEFI / BIOS ── POST, DRAM training, PCIe enumeration, ACPI tables ──▶ boots the kernel             │
+│   CPU microcode ──▶ patches the cores       SMM (ring −2) ──▶ power/thermal events behind the OS     │
+│   Device firmware ──▶ runs inside SSD (FTL), NIC, GPU, BMC   ACPI AML ──▶ interpreted by the kernel  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**How to read the interactions.** An application never touches hardware directly. It executes unprivileged instructions on a core; when it needs anything the core cannot do alone (I/O, more memory, another process), it executes a trap instruction and the kernel takes over on the same core. The kernel talks to devices by storing into MMIO addresses; devices talk back by writing into DRAM (DMA) and raising interrupts. The memory hierarchy, MMU, and coherence fabric sit silently under every one of those steps, and firmware set the whole thing up before the kernel existed. Section 15 walks four of these paths instruction-by-instruction.
+**How to read the interactions.** An application never touches hardware directly. It executes unprivileged instructions on a core; when it needs anything the core cannot do alone (I/O, more memory, another process), it executes a trap instruction and the kernel takes over on the same core. The kernel talks to devices by storing into MMIO addresses; devices talk back by writing into DRAM (DMA) and raising interrupts. The memory hierarchy, MMU, and coherence fabric sit silently under every one of those steps, and firmware set the whole thing up before the kernel existed. Section 15 walks four of these paths instruction-by-instruction. The cycle every I/O operation follows is:
+
+```mermaid
+flowchart LR
+    A["User program"] -- "① syscall" --> K["Kernel driver"]
+    K -- "② descriptors, buffers" --> M[("DRAM")]
+    K -- "③ MMIO doorbell" --> D["Device"]
+    D -- "DMA read/write" --> M
+    D -- "④ MSI-X interrupt" --> K
+    K -- "wake, return" --> A
+```
 
 ---
 
@@ -375,7 +341,7 @@ The programming-language memory model (C11/C++11, Java JMM, Go) is defined *abov
 
 Every non-memory device in a server (GPU, NIC, NVMe, and via the chipset everything else) is a **PCIe** endpoint. PCIe is a packet-switched, point-to-point network: lanes (×1–×16), generations (Gen4: ~2 GB/s per lane per direction, Gen5: ~4 GB/s, Gen6: ~8 GB/s), a **root complex** in the CPU, optional **switches**, and **endpoints**. Traffic is **TLPs** (transaction layer packets): memory read/write, configuration, message.
 
-The three ways software and a PCIe device interact map exactly to the three non-instruction edges in the master diagram:
+The three ways software and a PCIe device interact map directly onto edges ②, ③, and ④ (plus DMA) in the master diagram:
 
 1. **Configuration space** (enumeration): at boot, firmware and then the kernel walk bus/device/function IDs, read the vendor/device ID, and program **BARs** (base address registers) — assigning each device a window of physical address space. This is how the driver knows *where* the device lives.
 2. **MMIO**: the driver `ioremap`s a BAR and does ordinary loads/stores to it. The core marks these pages **uncacheable** (or write-combining for framebuffers); each store becomes a PCIe write TLP posted to the device. MMIO reads are *synchronous round trips* (~1 µs) and are the reason drivers avoid reading device registers on hot paths — status goes in DRAM via DMA instead.
