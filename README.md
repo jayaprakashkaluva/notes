@@ -24,6 +24,12 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 | [Flink Internals](analytics/flink-internals.md) | Apache Flink — internal implementation details |
 | [Presto Architecture](analytics/presto-technical-architecture.md) | Presto (prestodb) — technical architecture deep dive |
 
+## Computer Architecture
+
+| Note | Topic |
+|---|---|
+| [Computer Architecture](computer-architecture/computer-architecture.md) | Hardware and software as one system — CPU, memory, I/O, firmware, kernel, runtimes, and how they interact |
+
 ## Fundamentals
 
 | Note | Topic |
