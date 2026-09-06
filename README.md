@@ -48,6 +48,13 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 | [MinHash, SimHash & LSH](datastructures/probablic-datastructures/minhash-simhash-lsh.md) | Similarity sketches & near-duplicate detection |
 | [Skip Lists](datastructures/probablic-datastructures/skip-lists.md) | Probabilistic balancing with exact answers |
 
+## Software Engineering
+
+| Note | Topic |
+|---|---|
+| [REST API Best Practices](software-engineering/rest-api-best-practices.md) | HTTP/REST API design grounded in RFC 9110/9457, Fielding, and the Microsoft, Google, Zalando, Stripe, and OWASP guidelines |
+| [GraphQL Best Practices](software-engineering/graphql-best-practices.md) | GraphQL schema, pagination, mutation, error, performance, and security practices grounded in the spec, graphql.org, Relay, Shopify, GitHub, Apollo, and OWASP |
+
 ## AI
 
 | Note | Topic |
