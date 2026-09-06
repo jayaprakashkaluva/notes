@@ -35,13 +35,18 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 | Note | Topic |
 |---|---|
 | [What Happens When You Run a Program](fundamentals/what-happens-when-you-run-a-program.md) | End-to-end trace of `./hello` — shell, fork/exec, ELF loader, scheduler, page faults, CPU pipeline, caches, DRAM, syscalls, exit |
-| [Probabilistic Data Structures](fundamentals/probabilistic-data-structures.md) | Overview, taxonomy & decision guide — start here |
-| [Bloom Filters & Cuckoo Filters](fundamentals/bloom-filters.md) | Approximate membership — Bloom, counting, blocked, Ribbon, cuckoo |
-| [HyperLogLog](fundamentals/hyperloglog.md) | Cardinality estimation — FM sketch, LogLog, HLL, HLL++ |
-| [Count-Min Sketch & Heavy Hitters](fundamentals/count-min-sketch.md) | Frequency estimation — Count-Min, Count Sketch, SpaceSaving, TinyLFU |
-| [Quantile Sketches](fundamentals/quantile-sketches.md) | Percentile estimation — t-digest, DDSketch, KLL |
-| [MinHash, SimHash & LSH](fundamentals/minhash-simhash-lsh.md) | Similarity sketches & near-duplicate detection |
-| [Skip Lists](fundamentals/skip-lists.md) | Probabilistic balancing with exact answers |
+
+## Data Structures
+
+| Note | Topic |
+|---|---|
+| [Probabilistic Data Structures](datastructures/probablic-datastructures/probabilistic-data-structures.md) | Overview, taxonomy & decision guide — start here |
+| [Bloom Filters & Cuckoo Filters](datastructures/probablic-datastructures/bloom-filters.md) | Approximate membership — Bloom, counting, blocked, Ribbon, cuckoo |
+| [HyperLogLog](datastructures/probablic-datastructures/hyperloglog.md) | Cardinality estimation — FM sketch, LogLog, HLL, HLL++ |
+| [Count-Min Sketch & Heavy Hitters](datastructures/probablic-datastructures/count-min-sketch.md) | Frequency estimation — Count-Min, Count Sketch, SpaceSaving, TinyLFU |
+| [Quantile Sketches](datastructures/probablic-datastructures/quantile-sketches.md) | Percentile estimation — t-digest, DDSketch, KLL |
+| [MinHash, SimHash & LSH](datastructures/probablic-datastructures/minhash-simhash-lsh.md) | Similarity sketches & near-duplicate detection |
+| [Skip Lists](datastructures/probablic-datastructures/skip-lists.md) | Probabilistic balancing with exact answers |
 
 ## AI
 

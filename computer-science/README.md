@@ -23,7 +23,7 @@ A self-contained curriculum for someone with **no prior computer science backgro
 
 - **Distributed systems** — [../distributed-systems/](../distributed-systems/) (time & ordering, replication, consensus, stream processing)
 - **Database internals** — [../datastores/](../datastores/) (PostgreSQL, MySQL, Redis, RocksDB, Cassandra...)
-- **Probabilistic data structures** — [../fundamentals/](../fundamentals/) (bloom filters, HyperLogLog, sketches)
+- **Probabilistic data structures** — [../datastructures/probablic-datastructures/](../datastructures/probablic-datastructures/) (bloom filters, HyperLogLog, sketches)
 - **Big-data engines** — [../analytics/](../analytics/) (Spark, Flink, ClickHouse, Presto)
 - **Containers** — [../infra/docker-deep-dive.md](../infra/docker-deep-dive.md)
 - **AI/LLM applications** — [../ai/](../ai/)

@@ -177,7 +177,7 @@ When no polynomial structure exists (see [doc 07](07-theory-of-computation.md) o
 Two ways to trade certainty for speed/space, both respectable:
 
 - **Randomized algorithms**: quicksort's random pivot (defeats adversarial inputs); hash functions themselves; reservoir sampling (uniform sample from a stream of unknown length); Miller-Rabin primality (the reason RSA keys can be generated — [doc 10](10-security-and-cryptography.md)); skip lists (doc 03). Las Vegas (always right, time random) vs. Monte Carlo (fast, tiny error probability — driven below hardware-failure rates by repetition).
-- **Approximation & sketches**: for NP-hard optimization, provable near-optimality (e.g., 2-approximate vertex cover, Christofides for TSP); for massive streams, tiny-memory approximate answers — distinct counts (HyperLogLog), frequencies (count-min sketch), quantiles: see [../fundamentals/](../fundamentals/), where these have their own deep dives.
+- **Approximation & sketches**: for NP-hard optimization, provable near-optimality (e.g., 2-approximate vertex cover, Christofides for TSP); for massive streams, tiny-memory approximate answers — distinct counts (HyperLogLog), frequencies (count-min sketch), quantiles: see [../datastructures/probablic-datastructures/](../datastructures/probablic-datastructures/), where these have their own deep dives.
 
 # 10 — Strings
 
