@@ -55,9 +55,88 @@ which level you are targeting and be honest about it in the docs.
   POST unless the method is safe.
 - **Avoid chatty APIs.** Microsoft: APIs "that expose a large number of small
   resources are known as chatty web APIs"; consider denormalizing into larger
-  resources, balanced against over-fetching.
+  resources, balanced against over-fetching. See §2a for the full trade-off.
 - **Never put secrets in URLs.** OWASP REST cheat sheet: credentials belong in
   headers or bodies, "never in URLs where they risk exposure in server logs."
+
+## 2a. Granularity: chatty I/O, extraneous fetching, and single responsibility
+
+Resource granularity is a trade-off between two opposite antipatterns that
+Microsoft documents as a pair.
+
+**Chatty I/O** (Microsoft Architecture Center antipattern). "The cumulative
+effect of a large number of I/O requests can have a significant impact on
+performance and responsiveness." The API-level cause is "implementing a
+single logical operation as a series of HTTP requests", which "often happens
+when developers try to follow an object-oriented paradigm, and treat remote
+objects as if they were local objects in memory." Their example is an API
+that exposes `users/{id}/username`, `users/{id}/gender`, and
+`users/{id}/dateofbirth` as separate GETs, forcing three round trips for one
+screen. The fix: "Reduce the number of I/O requests by packaging the data
+into larger, fewer requests", i.e. one `GET users/{id}` returning the whole
+representation. Symptoms to look for: "a large number of small network
+requests made by an application instance to the same service."
+
+**Extraneous fetching** (the opposite antipattern). "More than needed data is
+retrieved for a business operation." Microsoft notes it "is often a result of
+overcompensating for the Chatty I/O antipattern": fetching every field of
+every product because a client *might* need it. Fixes: return only the fields
+the operation needs, paginate unbounded collections, and let the data store
+filter and aggregate rather than doing it in the API layer. Watch the ratio
+of bytes read from the store to bytes returned to the client; a large gap
+means the API is fetching what it discards.
+
+**How to choose.** Microsoft's guidance from the chatty I/O page:
+
+- "The right answer will depend on the actual usage patterns." If clients
+  usually need just one field, a separate endpoint for it can be correct.
+- "Partition the information for an object into two chunks, *frequently
+  accessed data* that accounts for most requests, and *less frequently
+  accessed data* that is used rarely," and return the small hot subset by
+  default.
+- Do not "make your I/O requests too large. An application should only
+  retrieve the information that it is likely to use."
+- Cache responses to avoid repeated fetches of the same data.
+
+The Architecture Center's microservices API guide adds two structural rules:
+
+- Model resources on domain aggregates and "favor coarse-grained APIs that
+  expose aggregates as resources"; "avoid creating APIs that let a client
+  manipulate the internal state of an aggregate."
+- Where different clients need different payload shapes, use the Backends
+  for Frontends pattern so each client gets "an optimal interface", rather
+  than one API that is chatty for some clients and bloated for others. Query
+  APIs such as OData or GraphQL are the escape hatch when "clients have
+  diverse data requirements that result in many specialized REST endpoints."
+
+**Single responsibility.** The principle is defined for objects ("only one
+responsibility and only one reason to change") and Microsoft's .NET
+architecture guide extends it upward: "When this principle is applied to
+application architecture and taken to its logical endpoint, you get
+microservices. A given microservice should have a single responsibility. If
+you need to extend the behavior of a system, it's usually better to do it by
+adding additional microservices, rather than by adding responsibility to an
+existing one." The microservices architecture guide frames the same idea as
+cohesion: each service "implements a specific end-to-end domain or business
+capability within a certain context boundary", and "more important than the
+size of the microservice is the internal cohesion it must have."
+
+Applied to a REST API this means:
+
+- One API (or service) owns one bounded context and its aggregates; it does
+  not reach into another context's data.
+- Resources and custom actions do one thing. Google AIP-136's rules that a
+  custom method name is a verb-noun combination and must not reuse the
+  standard verbs (Get, List, Create, Update, Delete) are the same discipline
+  at the endpoint level.
+- The principle does **not** mean one endpoint per field; that is the chatty
+  I/O antipattern above. Responsibility is measured per domain capability,
+  not per attribute.
+
+None of the guidelines surveyed here (RFCs, Microsoft, Google, Zalando,
+Stripe, OWASP) state "single responsibility per endpoint" as a rule; that
+phrasing appears only in blog posts. The grounded form is the service- and
+aggregate-level guidance quoted above.
 
 ## 3. HTTP method semantics (RFC 9110 §9)
 
@@ -299,6 +378,8 @@ ports/hosts; audit-log auth failures; sanitize logs against injection.
 ## 15. Quick checklist
 
 - [ ] Resources are nouns; collections plural; one casing convention.
+- [ ] Resources map to domain aggregates: neither one-endpoint-per-field (chatty) nor return-everything (extraneous fetching).
+- [ ] Each API owns one bounded context; endpoints and custom actions do one thing.
 - [ ] Methods match RFC 9110 semantics; PUT/DELETE are truly idempotent.
 - [ ] 405 with `Allow`; 415/406 for media-type problems.
 - [ ] Errors use RFC 9457 (or one documented vendor format); no stack traces.
@@ -336,6 +417,11 @@ Published guidelines
 
 - Microsoft Azure Architecture Center, *Web API design best practices*. https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design
 - Microsoft, *Azure REST API Guidelines*. https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md
+- Microsoft Azure Architecture Center, *Chatty I/O antipattern*. https://learn.microsoft.com/en-us/azure/architecture/antipatterns/chatty-io/
+- Microsoft Azure Architecture Center, *Extraneous Fetching antipattern*. https://learn.microsoft.com/en-us/azure/architecture/antipatterns/extraneous-fetching/
+- Microsoft Azure Architecture Center, *API design for microservices* (aggregates as resources, BFF, REST vs RPC). https://learn.microsoft.com/en-us/azure/architecture/microservices/design/api-design
+- Microsoft, *Architect Modern Web Applications with ASP.NET Core and Azure*, "Architectural principles" (single responsibility). https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+- Microsoft, *.NET Microservices Architecture*, "Microservices architecture" (cohesion, business capability per service). https://learn.microsoft.com/en-us/dotnet/architecture/microservices/architect-microservice-container-applications/microservices-architecture
 - Zalando, *RESTful API Guidelines*. https://opensource.zalando.com/restful-api-guidelines/
 - Google, *API Improvement Proposals*: AIP-134 Update, AIP-136 Custom methods, AIP-158 Pagination, AIP-180 Backwards compatibility, AIP-193 Errors. https://google.aip.dev/
 - Stripe, "APIs as infrastructure: future-proofing Stripe with versioning". https://stripe.com/blog/api-versioning
