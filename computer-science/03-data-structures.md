@@ -83,7 +83,7 @@ head -> [17|next] -> [42|next] -> [8|next] -> null
 
 The honest modern assessment: linked lists **lose to dynamic arrays for almost every real workload**, including many mid-insertion ones — O(n) shifting of contiguous memory is often faster than O(1) pointer surgery plus O(n) cache-missing traversal to *find* the spot. They remain essential (a) as a concept — "nodes + pointers" is the germ of trees and graphs, (b) inside systems where nodes are embedded in larger objects and never traversed by index (OS kernels use *intrusive* lists heavily — run queues, wait lists), (c) in interviews, and (d) as building blocks (hash-table chaining, §6; LRU caches = hash map + doubly-linked list — a classic composite worth knowing).
 
-**Skip lists** — linked lists with probabilistic express lanes giving O(log n) search — power Redis sorted sets; see [../fundamentals/skip-lists.md](../fundamentals/skip-lists.md).
+**Skip lists** — linked lists with probabilistic express lanes giving O(log n) search — power Redis sorted sets; see [../datastructures/probablic-datastructures/skip-lists.md](../datastructures/probablic-datastructures/skip-lists.md).
 
 # 5 — Stacks and Queues
 
@@ -121,7 +121,7 @@ Two keys will inevitably hash to the same bucket (pigeonhole: more possible keys
 - **Worst case is O(n)** — if all keys collide. This is *exploitable*: attackers sending thousands of deliberately-colliding keys turned web frameworks into CPU furnaces (HashDoS, 2011) — the reason languages now seed hashes randomly per process (also why Python `set`/`dict` iteration order can't be relied on across runs, and why Go *deliberately randomizes* map iteration order to stop you depending on it).
 - **Keys must be hashable and equal-consistent**: `a == b` must imply `hash(a) == hash(b)` (the contract behind Java's "override equals and hashCode together"; why mutable objects make dangerous keys — mutate a key after insertion and it's lost in the wrong bucket).
 - **No order**: hash tables scatter keys by design. Need sorted traversal or range queries ("all keys between X and Y")? That's what trees are for (§8) — the single most common reason to reach past a hash map.
-- Cousins: **sets** (hash table storing only keys — membership tests in O(1)); **bloom filters** (probabilistic membership in tiny space, small false-positive rate — see [../fundamentals/bloom-filters.md](../fundamentals/bloom-filters.md)).
+- Cousins: **sets** (hash table storing only keys — membership tests in O(1)); **bloom filters** (probabilistic membership in tiny space, small false-positive rate — see [../datastructures/probablic-datastructures/bloom-filters.md](../datastructures/probablic-datastructures/bloom-filters.md)).
 
 # 7 — Trees
 
@@ -194,7 +194,7 @@ Start from the *operations your workload actually performs*, not from the data's
 | Nested/hierarchical data | **tree** | mirrors the structure |
 | Arbitrary relationships | **graph** (adjacency list) | fully general |
 | O(1) removal from within a scan-free sequence, kernel-style | **(intrusive) linked list** | niche but real |
-| Approximate membership/counts at huge scale | **sketches** | [../fundamentals/](../fundamentals/) |
+| Approximate membership/counts at huge scale | **sketches** | [../datastructures/probablic-datastructures/](../datastructures/probablic-datastructures/) |
 
 Second-order expert habits: compose structures (LRU = hash + linked list; ordered dict = hash + insertion list; graph = hash of adjacency lists); measure before trusting big-O across a factor-of-two decision (cache effects — §2 vs §4 — decide those); and remember n: below a few hundred elements, *everything* is fast and the simplest structure wins.
 

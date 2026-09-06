@@ -717,4 +717,4 @@ Roughly in order of ambition:
 
 ---
 
-*Written 2026-08-23. Companion notes: [docker-deep-dive](../infra/docker-deep-dive.md), [distributed-systems](../distributed-systems/), [fundamentals](../fundamentals/).*
+*Written 2026-08-23. Companion notes: [docker-deep-dive](../infra/docker-deep-dive.md), [distributed-systems](../distributed-systems/), [datastructures](../datastructures/probablic-datastructures/).*
