@@ -129,6 +129,22 @@ simplest possible contract for a distinct kind of consumer:
          Flat key space, whole-object reads and writes, HTTP.
 ```
 
+Seen from the application, the three differ in what a "thing" is and how
+it is addressed:
+
+```
+ Application view                 Unit of access       Typical consumer
+ ─────────────────────────────    ──────────────────   ─────────────────────
+ Block:  disk = array of blocks   fixed-size block     filesystems, databases,
+         addressed by number      (e.g. 4 KiB)         virtual machine disks
+
+ File:   tree of directories      byte range within    people, shell tools,
+         and named files          a named file         most applications
+
+ Object: flat namespace of        whole object,        web / cloud apps,
+         key -> blob + metadata   by key               backups, media, data lakes
+```
+
 They are not three competing products. They are three **layers of
 abstraction**, and each one exists because the layer below it is too
 primitive for a whole class of users while the layer above it is too
