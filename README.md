@@ -52,7 +52,7 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 
 | Note | Topic |
 |---|---|
-| [REST API Best Practices](software-engineering/rest-api-best-practices.md) | HTTP/REST API design grounded in RFC 9110/9457, Fielding, and the Microsoft, Google, Zalando, Stripe, and OWASP guidelines |
+| [REST API Best Practices](software-engineering/rest-api-best-practices.md) | HTTP/REST API design grounded in RFC 9110/9457, Fielding, and the Microsoft, Google, Zalando, Stripe, and OWASP guidelines; includes granularity and mobile-client sections |
 | [GraphQL Best Practices](software-engineering/graphql-best-practices.md) | GraphQL schema, pagination, mutation, error, performance, and security practices grounded in the spec, graphql.org, Relay, Shopify, GitHub, Apollo, and OWASP |
 
 ## AI

@@ -365,6 +365,158 @@ Design against the concrete failure classes OWASP catalogues:
 Also from the OWASP REST cheat sheet: management endpoints on separate
 ports/hosts; audit-log auth failures; sanitize logs against injection.
 
+## 13a. Designing for mobile clients
+
+The general REST guidelines say almost nothing mobile-specific. The grounded
+guidance comes from the platform vendors (Android, Apple), Microsoft's
+patterns, and the OAuth working group. It reduces to four themes: the radio
+is the battery, payloads must fit the device, sync must be incremental, and
+the app cannot keep a secret.
+
+### 13a.1 The radio is the battery: design for fewer, larger requests
+
+Android's connectivity guide is the primary source:
+
+- "Requests that your app makes to the network are a major cause of battery
+  drain because they turn on power-consuming cellular or Wi-Fi radios...
+  Something as simple as a network request every 15 seconds can keep the
+  mobile radio on continuously and quickly use up battery power."
+- The radio has a multi-second "tail time" after each transfer before it
+  drops to low power, so the cost of a request is dominated by waking the
+  radio, not by bytes moved.
+- "Bundling your data transfers so that you're transferring more data less
+  often is one of the best ways to improve battery efficiency."
+- "Prefetching data is another effective way to reduce the number of
+  independent data transfer sessions." Android's rough guide: prefetch in
+  1–5 MB chunks every 2–5 minutes for content likely to be viewed soon.
+- "It's generally more efficient to reuse existing network connections than
+  it is to initiate new ones."
+
+What this means for the API:
+
+- **Expose coarse-grained resources and bulk endpoints.** One call that
+  returns a full screen's data beats several per-item calls (this is the
+  chatty I/O antipattern in §2a with a battery cost attached).
+- **Let list endpoints return more than one screen.** A `page_size` cap that
+  is too small forces the client into extra radio wake-ups when it tries to
+  prefetch.
+- **Offer a batch endpoint for writes** that an app queues while offline or
+  in the background. Android's recommendation is to "queue a set of network
+  requests and process them together."
+- **Keep connections reusable** (persistent connections) so a burst of
+  requests shares one connection; Android notes that its HTTP clients pool
+  connections by default, which only helps if the server keeps them open.
+- **Compress responses** (§6) so each radio wake-up moves fewer bytes.
+
+### 13a.2 Push instead of polling; tolerate deferral
+
+- Android: "Compared to polling, where your app must regularly ping the
+  server to query for new data, this event-driven model allows your app to
+  create a new connection only when it knows there is data to download. The
+  model minimizes unnecessary connections and reduces latency." Provide a
+  push channel (platform push notifications, or server-sent change
+  notifications) for anything a client would otherwise poll.
+- Both platforms schedule non-urgent work opportunistically: Android's
+  WorkManager runs jobs only "when the device is charging and is connected
+  to an unmetered network"; Apple's WWDC21 networking session recommends
+  discretionary background transfers and `waitsForConnectivity` rather than
+  client-side retry loops. The API consequence: **non-urgent uploads and
+  syncs may arrive hours late and out of order**, so they must be
+  idempotent (§10) and resumable (`Range` support, §8), and must not depend
+  on a short-lived server-side session.
+- Android also advises throttling redundant user actions such as repeated
+  pull-to-refresh. Cheap conditional GETs (below) make that harmless when it
+  does happen.
+
+### 13a.3 Payloads sized for the device: Backends for Frontends
+
+Microsoft's Backends for Frontends pattern exists for exactly this case:
+"the capabilities of a mobile device differ significantly from a desktop
+browser in terms of screen size, performance, and display limitations." A
+per-interface backend "customizes the client experience for a specific
+interface without affecting other interfaces" and "optimizes performance to
+meet the needs of the frontend environment." In their worked example the
+mobile BFF "prioritizes bandwidth efficiency and takes advantage of
+caching" and returns a single page, while the desktop BFF "retrieves
+multiple pages in a single request."
+
+Considerations they list: each extra service adds an operational lifecycle
+and a network hop; keep cross-cutting concerns (auth, rate limiting,
+routing) in a gateway, not in each BFF; and the pattern may be unnecessary if
+you already use GraphQL with frontend-specific resolvers or if all
+interfaces make the same requests.
+
+Whatever the topology, the mobile-facing API should support **field
+selection or sparse representations** and **small default page sizes**
+(Microsoft's extraneous-fetching guidance, §2a) so a phone on a metered
+network does not download desktop-sized payloads.
+
+### 13a.4 Incremental sync: delta queries, ETags, resumable transfers
+
+- **Delta queries.** Microsoft Graph's change-tracking model is the
+  reference shape: a client fetches a collection once, receives an opaque
+  `deltaLink` token, and thereafter asks only for changes "without
+  performing a full read of the target resource with every request." Design
+  rules from that page worth copying:
+  - Tokens are opaque; clients "copy and apply" the returned URL unchanged.
+  - Deleted items are returned as an id plus a removal marker so the client
+    can purge its local store.
+  - Clients "must be prepared for replays" (the same change appearing
+    twice), so merges must be idempotent.
+  - Tokens expire; the server signals a forced full resync with
+    `410 Gone` and a fresh starting URL.
+  - Pair delta pull with push notifications to "nearly eliminate the need
+    to frequently poll."
+- **ETags on everything.** Android's guidance to "cache data aggressively"
+  works only if the API returns validators. Every mobile-facing GET should
+  carry an `ETag` and honor `If-None-Match` so a refresh costs a bodiless
+  `304` (§7).
+- **Resumable downloads and uploads.** Large transfers on mobile are
+  interrupted by network changes and app suspension. Support `Range`
+  requests with `Accept-Ranges` and `206` responses (§8) so a background
+  session can resume rather than restart.
+
+### 13a.5 Security: the app is a public client
+
+- **No embedded secrets.** RFC 8252 (OAuth 2.0 for Native Apps, a Best
+  Current Practice): "Secrets that are statically included as part of an app
+  distributed to multiple users should not be treated as confidential
+  secrets." Do not design an API that requires a client secret from a mobile
+  app; anything shipped in the binary is public.
+- **Authorization code + PKCE via the system browser.** RFC 8252: "Public
+  native app clients MUST implement the Proof Key for Code Exchange" and
+  "native apps MUST use an external user-agent to perform OAuth
+  authorization requests", not an embedded webview. The authorization
+  server must accept the redirect URI forms the RFC defines: private-use
+  URI schemes, claimed `https` URIs, or loopback.
+- **TLS that passes platform policy.** Apple's App Transport Security blocks
+  cleartext by default and requires TLS 1.2 or later, forward-secrecy
+  cipher suites, SHA-256 certificate signatures, and at least 2048-bit RSA
+  or 256-bit ECC keys. Android disables cleartext "starting with Android 9
+  (API level 28)." An endpoint that fails these is unreachable from a stock
+  app without an exemption.
+- **Plan key rotation if clients pin.** Android's network security
+  configuration supports pin sets with an expiry and says to "always
+  include a backup key so that if you are forced to switch to new keys or
+  change CAs... your app's connectivity is unaffected." If you expect apps
+  to pin, publish the backup public key and the rotation schedule ahead of
+  time; a surprise rotation strands every installed client.
+- **Support token revocation.** Tokens live on a device that can be lost,
+  so the OWASP REST cheat sheet's advice to keep a token denylist for early
+  logout (§13) matters more here than for server-to-server clients.
+
+### 13a.6 Mobile checklist
+
+- [ ] Screen-level or bulk endpoints exist; no per-field or per-item chatter.
+- [ ] Batch write endpoint for queued offline actions; all writes idempotent.
+- [ ] Push or change notifications available for anything a client would poll.
+- [ ] Field selection and small default pages; a BFF if web and mobile diverge.
+- [ ] Delta endpoint with opaque tokens, tombstones, replay tolerance, and `410` resync.
+- [ ] `ETag` / `If-None-Match` on all GETs; `Range` on large resources.
+- [ ] OAuth authorization code + PKCE; no client secret required; RFC 8252 redirect URIs accepted.
+- [ ] TLS 1.2+, forward secrecy, SHA-256 certs, no cleartext endpoints.
+- [ ] Published pin backup key and rotation policy if pinning is expected.
+
 ## 14. Describe the contract
 
 - Publish an **OpenAPI** description. Microsoft: "OpenAPI promotes a
@@ -391,6 +543,7 @@ ports/hosts; audit-log auth failures; sanitize logs against injection.
 - [ ] 429 + `Retry-After` on throttling.
 - [ ] Explicit versioning policy; breaking changes defined; `Deprecation`/`Sunset` headers.
 - [ ] Object-, property-, and function-level authorization on every endpoint.
+- [ ] Mobile clients: bulk/screen-level endpoints, push over polling, delta sync, PKCE without client secrets (see §13a).
 - [ ] OpenAPI description published and diffed in CI.
 
 ## 16. Sources
@@ -426,6 +579,18 @@ Published guidelines
 - Google, *API Improvement Proposals*: AIP-134 Update, AIP-136 Custom methods, AIP-158 Pagination, AIP-180 Backwards compatibility, AIP-193 Errors. https://google.aip.dev/
 - Stripe, "APIs as infrastructure: future-proofing Stripe with versioning". https://stripe.com/blog/api-versioning
 - Fowler, M. "Richardson Maturity Model". https://martinfowler.com/articles/richardsonMaturityModel.html
+
+Mobile clients
+
+- Android Developers, *Minimize the effect of regular updates*. https://developer.android.com/develop/connectivity/minimize-effect-regular-updates
+- Android Developers, *Optimize network access*. https://developer.android.com/develop/connectivity/network-ops/network-access-optimization
+- Android Developers, *Battery consumption* (Build for Billions). https://developer.android.com/docs/quality-guidelines/build-for-billions/battery-consumption
+- Android Developers, *Network security configuration*. https://developer.android.com/privacy-and-security/security-config
+- Apple Developer, *Preventing insecure network connections* (App Transport Security). https://developer.apple.com/documentation/security/preventing-insecure-network-connections
+- Apple WWDC21, *Reduce network delays for your app*. https://developer.apple.com/videos/play/wwdc2021/10239/
+- Microsoft Azure Architecture Center, *Backends for Frontends pattern*. https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends
+- Microsoft Graph, *Use delta query to track changes*. https://learn.microsoft.com/en-us/graph/delta-query-overview
+- RFC 8252 *OAuth 2.0 for Native Apps*. https://www.rfc-editor.org/rfc/rfc8252.html
 
 Security
 
