@@ -34,6 +34,7 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 
 | Note | Topic |
 |---|---|
+| [Computer Networking](computer-networking/computer-networking.md) | Staff-level deep dive — physical/link/IP/routing/BGP, TCP and congestion control in depth, QUIC, DNS, HTTP/1.1→3, TLS/PKI, performance numbers, host stack and kernel path, datacenter/cloud/Kubernetes networking, load balancers and CDNs, mobile, debugging signatures, war stories, and a decision checklist |
 | [OSI and TCP/IP Models](computer-networking/osi-and-tcp-ip-models.md) | Why networks are layered — the pre-layering problem, what each model solves, OSI ↔ TCP/IP mapping, encapsulation, layer-by-layer map to real apps and products, end-to-end walkthroughs, per-layer debugging, and layer violations |
 
 ## Fundamentals
