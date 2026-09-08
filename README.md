@@ -30,6 +30,12 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 |---|---|
 | [Computer Architecture](computer-architecture/computer-architecture.md) | Hardware and software as one system — CPU, memory, I/O, firmware, kernel, runtimes, and how they interact |
 
+## Computer Networking
+
+| Note | Topic |
+|---|---|
+| [OSI and TCP/IP Models](computer-networking/osi-and-tcp-ip-models.md) | Why networks are layered — the pre-layering problem, what each model solves, OSI ↔ TCP/IP mapping, encapsulation, layer-by-layer map to real apps and products, end-to-end walkthroughs, per-layer debugging, and layer violations |
+
 ## Fundamentals
 
 | Note | Topic |
