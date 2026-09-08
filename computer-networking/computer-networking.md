@@ -7,6 +7,7 @@ Every section is built the same way: **the problem** → **the mechanism that so
 Companion notes in this repo:
 
 - [OSI and TCP/IP Models](osi-and-tcp-ip-models.md) — why networks are layered, encapsulation, and where the layer model leaks. This note assumes you have that vocabulary and goes deep on each layer's actual protocols.
+- [What Happens When You Type a URL](what-happens-when-you-type-a-url.md) — the end-to-end narrative (keystroke → DNS → TCP/TLS → HTTP → CDN/origin → render) that walks through the mechanisms in this note in the order a real page load hits them.
 - [Computer Architecture](../computer-architecture/computer-architecture.md) — §9 covers the NIC, DMA rings, and interrupts from the hardware side.
 - [REST API Best Practices](../software-engineering/rest-api-best-practices.md) — application-layer design that sits on top of everything here.
 - [Computer Networks (survey)](../computer-science/05-computer-networks.md) — the short version of this note.

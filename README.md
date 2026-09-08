@@ -36,6 +36,7 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 |---|---|
 | [Computer Networking](computer-networking/computer-networking.md) | Staff-level deep dive — physical/link/IP/routing/BGP, TCP and congestion control in depth, QUIC, DNS, HTTP/1.1→3, TLS/PKI, performance numbers, host stack and kernel path, datacenter/cloud/Kubernetes networking, load balancers and CDNs, mobile, debugging signatures, war stories, and a decision checklist |
 | [OSI and TCP/IP Models](computer-networking/osi-and-tcp-ip-models.md) | Why networks are layered — the pre-layering problem, what each model solves, OSI ↔ TCP/IP mapping, encapsulation, layer-by-layer map to real apps and products, end-to-end walkthroughs, per-layer debugging, and layer violations |
+| [What Happens When You Type a URL](computer-networking/what-happens-when-you-type-a-url.md) | End-to-end trace from keystroke to pixels — omnibox and URL parsing, HSTS/Safe Browsing, cache and cookies, proxy/PAC decision, DNS recursion, the internal-vs-external route lookup (netmask, VPN, split-horizon DNS), sockets/ARP/Wi-Fi, NAT/ISP/BGP/anycast, TCP and TLS 1.3 handshakes, QUIC, HTTP/2 request, CDN edge and origin/DB, slow start and the receive path, browser security checks, the rendering pipeline to vsync, a worked timeline, how ping/telnet/curl/service-to-service calls differ from the browser, failure table, and lab path |
 
 ## Fundamentals
 
@@ -59,6 +60,7 @@ Technical deep-dive notes on the architecture and internals of databases, analyt
 
 | Note | Topic |
 |---|---|
+| [Domain-Driven Design](DDD/domain-driven-design.md) | Staff-level deep dive — the problem DDD solves and the decay timeline without it, ubiquitous language, bounded contexts and context mapping (ACL, OHS, shared kernel), core-domain distillation, entities/values/aggregates with Vernon's rules, domain events, repositories and services, hexagonal/modular-monolith architecture, EventStorming, ORMs/event sourcing/CQRS, sagas and the outbox in microservices, legacy bubbles and the strangler, a worked fulfilment example, anti-patterns, war stories, decision checklist, reading notes, and a lab path |
 | [REST API Best Practices](software-engineering/rest-api-best-practices.md) | HTTP/REST API design grounded in RFC 9110/9457, Fielding, and the Microsoft, Google, Zalando, Stripe, and OWASP guidelines; includes granularity and mobile-client sections |
 | [GraphQL Best Practices](software-engineering/graphql-best-practices.md) | GraphQL schema, pagination, mutation, error, performance, and security practices grounded in the spec, graphql.org, Relay, Shopify, GitHub, Apollo, and OWASP |
 

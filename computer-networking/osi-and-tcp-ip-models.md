@@ -4,7 +4,7 @@ A working engineer's guide to the two reference models every network conversatio
 
 Throughout, the models are treated as what they are: *vocabulary and a division of responsibility*, not physical law. Real protocols leak across layers, and the second-to-last section is devoted to exactly where and why.
 
-Companion notes: [Computer Networking](computer-networking.md) (the protocol-by-protocol deep dive that builds on this note), [Computer Architecture](../computer-architecture/computer-architecture.md) (§9 Networking Hardware covers the NIC, DMA rings, and the kernel receive path), [REST API Best Practices](../software-engineering/rest-api-best-practices.md) (lives entirely at layer 7).
+Companion notes: [Computer Networking](computer-networking.md) (the protocol-by-protocol deep dive that builds on this note), [What Happens When You Type a URL](what-happens-when-you-type-a-url.md) (an end-to-end trace of one page load through every layer described here), [Computer Architecture](../computer-architecture/computer-architecture.md) (§9 Networking Hardware covers the NIC, DMA rings, and the kernel receive path), [REST API Best Practices](../software-engineering/rest-api-best-practices.md) (lives entirely at layer 7).
 
 ---
 
