@@ -65,7 +65,7 @@ lsmod
 dmesg
 ```
 
-### Staff-level connection
+### engineer-level connection
 
 When an API is slow, distinguish application execution time from time spent waiting inside kernel operations such as network I/O, disk I/O, locks, page faults, or scheduling.
 
@@ -265,7 +265,7 @@ load average: 8.2, 7.9, 6.5
 
 Do **not** interpret load average as CPU percentage. Linux load includes runnable tasks and tasks in certain uninterruptible waits.
 
-### Staff-level questions
+### engineer-level questions
 
 When CPU is high, ask:
 
@@ -577,7 +577,7 @@ A successful application `write()` does not always mean the bytes are durable on
 
 Durability-sensitive systems—databases, logs, queues—often rely on `fsync` or equivalent mechanisms.
 
-Staff-level connection:
+engineer-level connection:
 
 ```text
 performance ↔ durability trade-off
@@ -796,7 +796,7 @@ sysctl net.ipv4.ip_local_port_range
 ss -s
 ```
 
-Staff-level lesson: a “network failure” can actually be local resource exhaustion caused by connection behavior.
+engineer-level lesson: a “network failure” can actually be local resource exhaustion caused by connection behavior.
 
 ---
 
@@ -918,7 +918,7 @@ Map Kubernetes concepts back to Linux:
 | OOMKilled | memory/cgroup/kernel behavior |
 | Node pressure | Linux resource pressure |
 
-A Staff Engineer should be able to debug below the Kubernetes abstraction when necessary.
+A software engineer should be able to debug below the Kubernetes abstraction when necessary.
 
 ---
 
@@ -1045,7 +1045,7 @@ setcap
 capsh --print
 ```
 
-Staff-level principle: prefer the minimum privilege required rather than running application containers as root.
+engineer-level principle: prefer the minimum privilege required rather than running application containers as root.
 
 ---
 
@@ -1544,7 +1544,7 @@ Understand:
 - clock synchronization/NTP
 - wall clock vs monotonic clock
 
-Staff-level connection:
+engineer-level connection:
 
 Clock issues can affect:
 
@@ -1766,7 +1766,7 @@ You can participate effectively in deep performance, platform, and kernel-adjace
 
 ---
 
-# Part XXI — A Staff Engineer's Production Checklist
+# Part XXI — A software engineer's Production Checklist
 
 When a Linux-hosted application is unhealthy, walk through the system rather than guessing.
 
@@ -1947,7 +1947,7 @@ native memory
 cgroup limits
 ```
 
-This is one of the most valuable exercises for a Java-focused Staff Engineer.
+This is one of the most valuable exercises for a Java-focused software engineer.
 
 ---
 
@@ -1981,7 +1981,7 @@ Kubernetes does not replace this model.
 They add abstractions and orchestration around it.
 ```
 
-A strong Staff Engineer should be able to move **down the abstraction stack** when production behavior cannot be explained at the application or Kubernetes layer.
+A strong software engineer should be able to move **down the abstraction stack** when production behavior cannot be explained at the application or Kubernetes layer.
 
 ---
 
