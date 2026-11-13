@@ -650,3 +650,161 @@ The links beside each explanation identify its supporting specification or imple
 - [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113.html) and [RFC 9114: HTTP/3](https://www.rfc-editor.org/rfc/rfc9114.html).
 - [Linux TCP API](https://man7.org/linux/man-pages/man7/tcp.7.html), [socket API](https://man7.org/linux/man-pages/man7/socket.7.html), and [kernel TCP settings](https://docs.kernel.org/networking/ip-sysctl.html).
 - [HTTPX timeout categories](https://www.python-httpx.org/advanced/timeouts/), [Go HTTP API](https://pkg.go.dev/net/http), [libcurl timeout options](https://curl.se/libcurl/c/CURLOPT_TIMEOUT.html), and [NGINX proxy timeouts](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_read_timeout).
+
+## 11. RCA playbook: application exceptions and which team to engage
+
+Added November 13, 2026. This section addresses **which component caused the missing progress**, so you can approach the right team with evidence. Section 10.4 already lists common exceptions; this section adds the investigation needed to move from an exception to a defensible root cause.
+
+**Example:** a client with a five-second read timeout can fail because the server spends eight seconds processing the request. In that case, investigate the server's processing path. The client being the place where the exception appears does not make the client the source of the delay.
+
+An exception alone usually cannot identify the exact failing machine or team. The tables below are **diagnostic inferences**: they show what additional observations narrow the cause and justify a handoff. They assume the observations refer to the same request, attempt, connection, and time window. This evidence-testing approach follows [Google SRE's troubleshooting method](https://sre.google/sre-book/effective-troubleshooting/).
+
+### 11.1 First identify the actual application failure
+
+Keep the full exception class/package, stack trace, and cause chain. A transport-level exception may identify the phase more clearly than its deepest cause. `ResourceAccessException` alone only says that Spring encountered an I/O failure.
+
+| What you see in the application | What it establishes | First investigation path |
+|---|---|---|
+| Apache `ConnectTimeoutException` or JDK `HttpConnectTimeoutException` | A connection-establishment limit was exceeded on that client path. | Determine the actual destination and whether TCP or TLS setup stalled; then use 11.2. |
+| Apache 5 `ConnectionRequestTimeoutException`; Apache 4 `ConnectionPoolTimeoutException` | The local connection-pool lease wait expired. | Client pool/concurrency first; determine why existing connections remain occupied using 11.5. |
+| `SocketTimeoutException: Read timed out` during HTTP response reading | The client's timed read did not obtain data within its allowed wait. | Server, dependency, proxy, and return-path evidence in 11.3. |
+| A `SocketTimeoutException` with a connect or TLS-handshake stack | A timed operation in that phase expired. | Investigate that setup phase, not automatically HTTP handler processing. |
+| Netty `ReadTimeoutException` | That library's configured read-inactivity rule fired. | Identify the channel/stream and stage, then follow the read-timeout investigation. |
+| JDK `HttpTimeoutException` or caller `TimeoutException` | A request/caller deadline expired. | Split elapsed time into pool, setup, upload, response-header, and body stages. This name does not isolate one stage. |
+| `SocketException: Connection reset` | The connection failed abruptly. | Identify the reset source and its policy using 11.5. A reset is not itself a read-timeout exception. |
+| An HTTP 504, possibly wrapped as Spring `HttpServerErrorException` | A gateway reports that its upstream wait expired. | Gateway's per-attempt upstream logs first, then the particular upstream component they identify. |
+
+Java's timed `Socket.connect(...)` can also throw `SocketTimeoutException`; the stack and enclosing transport exception matter. Apache 4's pool-timeout exception extends its connect-timeout class, so matching only the superclass can misclassify a local pool shortage as a network connection failure. [JDK socket operations](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/Socket.html), [Apache 4 pool exception](https://hc.apache.org/httpcomponents-client-4.5.x/current/httpclient/apidocs/org/apache/http/conn/ConnectionPoolTimeoutException.html), [Apache 5 lease implementation](https://raw.githubusercontent.com/apache/httpcomponents-client/rel/v5.3.1/httpclient5/src/main/java/org/apache/hc/client5/http/impl/classic/InternalExecRuntime.java).
+
+### 11.2 Connection timeout: is the cause the server, network, or client?
+
+Start by recording the resolved destination IP and port, proxy configuration, and failed attempt. If the client connects to a load balancer or forward proxy, that is the TCP peer to investigate first; the origin server is on another leg.
+
+For a confirmed TCP-setup timeout, use matched packet observations and host/device telemetry:
+
+| Evidence for the failed attempt | What it points to | Team to engage and what to ask |
+|---|---|---|
+| Resolution has not completed, or client transport tracing shows it has not started a TCP attempt. | Failure/delay before TCP setup. A missing SYN in one capture alone is insufficient. | Client/platform or DNS team: verify resolver timing, destination selection, and where the attempt is blocked. |
+| SYN leaves the client but does not reach the destination boundary in complete, correctly placed captures. | Loss/filtering between those observation points. | Network/security team: check route, ACL/firewall, NAT, and flow logs for that source/destination/time window. |
+| SYN reaches the destination; no SYN+ACK leaves; local listener/backlog or resource telemetry shows trouble. | Destination-host/listener-side setup problem. | Owner of that endpoint, often server platform or LB team: check listener binding, pending connections, host resources, and local filtering. |
+| SYN+ACK leaves the destination but does not return to the client boundary. | Return-path loss/filtering between observation points. | Network/security team: check asymmetric routing and return-direction policies. |
+| TCP handshake completes, then TLS traffic stalls. | Plain TCP setup succeeded on this leg; secure setup is the remaining issue. | Owner of the TLS endpoint plus network team as indicated by TLS traces. Check SNI/TLS negotiation and traffic in both directions. |
+| Repeated attempts target an obsolete or unintended IP/port. | Client configuration, service discovery, DNS, or deployment routing selected the wrong destination. | Owner of the bad configuration/record, with the actual resolved address and expected target. |
+
+**Do not attribute a confirmed TCP-handshake timeout to a slow database query merely because the database is slow elsewhere.** Normal handler processing happens after connection setup. Server overload can still affect new connections if it also exhausts listener/host resources; establish that link with connection-queue and host evidence. Linux explicitly documents listener/backlog behavior, including optional resets when a listening service accepts too slowly. [Linux TCP listener settings](https://docs.kernel.org/networking/ip-sysctl.html).
+
+Likewise, TCP connection success does not prove an application handler started: pending connections can wait to be accepted. [Linux accept queue](https://man7.org/linux/man-pages/man2/accept.2.html). Apache's checked classic connection operator also resolves addresses before attempting them, so total elapsed time alone does not isolate a particular TCP attempt. [Apache connection operator](https://raw.githubusercontent.com/apache/httpcomponents-client/rel/v5.3.1/httpclient5/src/main/java/org/apache/hc/client5/http/impl/io/DefaultHttpClientConnectionOperator.java).
+
+### 11.3 Socket/read timeout: when should you approach the server team?
+
+First establish that the timed read belongs to the HTTP response, and whether it was waiting for initial headers or a later body portion. A handshake read can produce a similar exception but needs a different investigation.
+
+For a response-read timeout, use this decision table:
+
+| Evidence for the same request | Cause indicated by that evidence | Appropriate first handoff |
+|---|---|---|
+| Server records receiving the complete request promptly, then does not produce initial response data until after the client's read limit. | Delay is in the server's pre-response processing path. | Server application team: investigate queueing, handler execution, locks, and downstream waits. |
+| Handler begins promptly, but a correlated downstream span consumes the wait; the downstream service's own logs confirm the delay. | The traced downstream operation is a demonstrated contributor. | Server team together with that dependency's owner. Use the dependency request/query ID to continue RCA. |
+| Handler begins late after ingress receives the request, and admission/executor/queue metrics show backlog. | Delay before handler execution, not necessarily inside business logic. | Owner of the queuing layer: server runtime/platform or gateway team, depending on where the queue is measured. |
+| Server's matched network trace shows response transmission before the deadline, but the next hop does not receive it. | Response-path loss between those observation points. | Network/security or the intervening device owner. Provide both observation points and the matched flow. |
+| Proxy receives upstream response data promptly but its downstream leg does not progress; proxy buffering/queue data accounts for the gap. | Delay at or after the proxy rather than demonstrated origin processing delay. | Proxy/LB team first, then the next network leg if indicated. |
+| Headers/body initially arrive, then the server's producer/dependency stops generating the remaining body for longer than the permitted read wait. | Mid-response production stall. | Server/streaming or dependency team. Initial fast headers do not establish that the complete response was timely. |
+| Service meets the agreed response-time requirement, but the client's verified limit is shorter than that permitted time. | Timeout-policy mismatch; this evidence does not establish a server regression. | Client/integration team and service owner: align the response contract and budgets. |
+| Correct response data reaches the client's network boundary promptly, but delivery to the waiting HTTP read/stream is not established. | Need to investigate local TLS/HTTP/runtime handling or remaining transport details. | Client/platform team first. A host packet capture alone does not prove that the expected application data reached the correct read. |
+| Only the client exception is available; server receipt and response timing are unknown. | Root cause remains unresolved. | Begin a joint client/server trace correlation; gather the missing evidence before assigning a cause. |
+
+For the ordinary blocking socket read, the JDK timeout limits how long that read waits. It does not report which remote component withheld data. [JDK read-timeout semantics](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/Socket.html#setSoTimeout(int)).
+
+**Two evidence traps:** an HTTP access log with status 200 is not proof that the client received the full response; a missing access-log entry is not proof that the request never arrived. Check when logs are written, sampling, request-ID propagation, and whether the request reached a different instance. NGINX documents logging at the location where processing ends. [NGINX access logging](https://nginx.org/en/docs/http/ngx_http_log_module.html).
+
+For HTTPS, packet captures show encrypted transport data, not automatically the matching HTTP response. With HTTP/2, traffic may belong to another stream. Correlate TLS termination/HTTP traces and stream/request IDs before using packet activity as proof of progress for the failing request.
+
+### 11.4 Worked RCA examples and concrete team handoffs
+
+All timings here are hypothetical examples. Compare durations at each component using local elapsed-time measurements, and align cross-host timestamps before drawing conclusions.
+
+#### Case A: client read timeout caused by delayed server processing
+
+Assume a small request and no interim response data:
+
+```text
+Time       Client                 Server application             Database
+0.00 s     Start request
+0.03 s                            Complete request received
+0.04 s                            Handler starts
+0.05 s                            Query sent ------------------->
+5.05 s     Read timeout           Still waiting for query
+8.05 s                            <---------------- Query returns
+8.10 s                            Attempts response
+```
+
+**Available evidence:** client TCP/TLS setup was fast; the server received the request promptly; a correlated query span lasted eight seconds; no HTTP response data was produced during the client's five-second read wait.
+
+**RCA conclusion supported so far:** server-side waiting on the query explains the missing response data. Engage the **server application team**, and involve the **database team** with the query identifier if database execution/lock telemetry corroborates the delay. A slow database span alone does not distinguish inefficient SQL, database lock waits, or waiting in the application's database connection pool.
+
+**Example handoff:** “Request R123 reached your instance in 30 ms. Our response read limit is 5 s. Your trace shows the query wait from 0.05 s to 8.05 s, with no response data before our timeout. Please investigate this query path and correlate its execution/connection-pool/lock timing.”
+
+The client may close/cancel after expiry; that does not establish whether the server stopped or completed the operation. The evidence here localizes the delay, not the final business outcome.
+
+#### Case B: connection timeout caused by a network policy
+
+**Available evidence:** the client repeatedly sends SYN to the intended LB address. A firewall flow log records a matching deny rule. The packets do not pass that firewall boundary during the failed attempt.
+
+**RCA conclusion:** the matching network-policy denial explains why the attempt could not connect. Engage the **network/security team** that owns that rule, with source/destination IPs, ports, timestamp, and rule ID. There is no evidence here that the server's HTTP handler or database caused this attempt's failure.
+
+If you have only unanswered SYNs from the client, the conclusion is weaker: the failure is consistent with a path/endpoint reachability problem, but you have not located the device or host responsible.
+
+#### Case C: healthy server response, incompatible client limit
+
+**Available evidence:** the endpoint's agreed response budget permits up to 10 s; matched traces show a 6 s response within that budget; client configuration permits only a 2 s response read wait and the server sends no earlier response data.
+
+**RCA conclusion:** the client's budget is incompatible with this permitted service behavior. Engage the **client/integration team** to resolve the mismatch with the service owner. If the actual contract instead required completion within 1 s, the same 6 s trace would demonstrate a server-side contract breach. The agreement changes the ownership conclusion; the exception class does not.
+
+### 11.5 Pool, TLS, reset, and gateway failures need their own evidence
+
+| Application failure | Evidence that narrows the cause | Team to engage |
+|---|---|---|
+| Pool acquisition timeout | Per-route leased connections remain at the limit and requests are pending. Identify what the leased calls are doing. | Client team first. If holders are all waiting on a demonstrated slow upstream, include the upstream team; the pool shortage can be a secondary effect. |
+| Pool acquisition timeout | Responses have completed, but the application retains response resources and connections are not released. | Client application team, with resource-lifetime evidence. A saturated pool alone does not prove a leak. |
+| TLS handshake timeout | TCP completes; TLS endpoint receives handshake traffic but does not progress; endpoint TLS logs/resource telemetry confirms a stall. | Owner of the TLS terminator, which may be an LB/proxy rather than the application server. If traffic vanishes between captures, involve that network-leg owner. |
+| `SSLHandshakeException` with a definite negotiation/trust failure | Cause chain and TLS logs identify the rejected negotiation or identity check. | Owner of the specific TLS setting/certificate/trust configuration. Do not classify every handshake exception as a timeout. |
+| Connection reset | Matched LB events show its idle policy issued a reset for this flow. | LB/platform team and client connection-reuse owner: investigate policy alignment and stale pooled reuse. |
+| Connection reset | Endpoint logs show an explicit abort/restart, correlated with the matched flow reset. | Owner of that endpoint. A restart timestamp by itself does not prove it reset this connection. |
+| HTTP 504 | Gateway per-attempt logs show upstream connection establishment failed. | Gateway-to-upstream network and target-listener owners; this is not yet evidence of slow business logic. |
+| HTTP 504 | Gateway upstream setup is prompt, but the matched upstream handler/dependency exceeds the gateway's wait. | Upstream application/dependency team; also review budget alignment with the gateway owner. |
+
+Apache exposes total and per-route pool statistics through `getTotalStats()` and `getStats(route)`; use the affected route, not just aggregate capacity. [Apache pool manager](https://hc.apache.org/components/httpcomponents-client-5.3.x/5.3.1/httpclient5/apidocs/org/apache/hc/client5/http/impl/io/PoolingHttpClientConnectionManager.html). TLS handshake failures cover negotiation failures generally. [JDK SSLHandshakeException](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/javax/net/ssl/SSLHandshakeException.html).
+
+A load balancer can deliberately send resets on idle expiry; Azure documents this behavior. [Azure reset policy](https://learn.microsoft.com/en-us/azure/load-balancer/load-balancer-tcp-reset). HTTP 504 identifies an untimely upstream response, not the specific internal bottleneck. [HTTP 504 definition](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6.5).
+
+Connection refusal is another distinct failure: `ConnectException` commonly means no process listens at the remote address/port. Confirm the target and explicit rejection before approaching the listener owner. [JDK ConnectException](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/ConnectException.html).
+
+### 11.6 Evidence to request from each team
+
+| Team / component | Specific evidence to collect |
+|---|---|
+| Client application | Full exception/cause chain; library and version; effective pool/connect/TLS/read/overall limits; each attempt's start/end and retries; destination/proxy; whether the connection was reused; pool and upload timing. |
+| Network/security | Matched source/destination flow, including NAT mapping where applicable; SYN/SYN+ACK/RST observations at both boundaries; drop/deny/routing evidence for the incident window. |
+| Proxy/load balancer | Request/trace ID, selected target and attempt, upstream connection/header/response timings, returned status, reset/idle events, buffering/queue information. |
+| Server application/runtime | Complete-request receipt, handler admission/start, dependency spans, first response write and body progress, runtime queue/resource telemetry, outcome after client cancellation. |
+| Database/downstream owner | Corresponding request/query ID; receipt/start/completion times; queue/lock/execution details. Separate an upstream application's connection-pool wait from actual database execution. |
+
+For NGINX, request `$upstream_addr`, `$upstream_status`, `$upstream_connect_time`, `$upstream_header_time`, and `$upstream_response_time`. The connection metric includes TLS when applicable; multiple upstream attempts produce multiple values. Treat these as documented milestones rather than blindly adding them together. [NGINX upstream variables](https://nginx.org/en/docs/http/ngx_http_upstream_module.html#variables).
+
+AWS ALB logs expose request, target, and response processing durations plus LB/target status. Their documented boundaries matter: for example, target processing includes upload time in some configurations, so it is not always pure application computation. [ALB log fields](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html#access-log-entry-format).
+
+### 11.7 Make the escalation as specific as the evidence permits
+
+Use this structure when approaching another team:
+
+```text
+Symptom: exact exception, operation, and affected request/attempt IDs.
+Scope: caller instance, actual peer/target, route, and incident time window.
+Budget: effective failing timeout and the agreed service response requirement.
+Established: phases confirmed complete and timings from matched observations.
+Localized delay/failure: the component or network interval supported by evidence.
+Unknown: the remaining cause that requires the receiving team's telemetry.
+Request: the specific queue, dependency, listener, TLS, or policy to check.
+```
+
+For a read timeout, “your handler received R123 promptly and its dependency wait exceeded our budget” supports a server/dependency investigation. “We see SocketTimeoutException, therefore your server is broken” does not. For a connection timeout, a matched firewall deny or listener-overflow record supports a concrete team handoff; an exception name alone supports only the next investigation step.
